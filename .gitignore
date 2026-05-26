@@ -1,0 +1,62 @@
+﻿### Root .gitignore — single source of truth ###
+
+# Node / Expo (frontend)
+frontend/node_modules/
+frontend/.expo/
+frontend/.expo-shared/
+frontend/.cache/
+frontend/.metro/
+frontend/.metro-cache/
+frontend/metro-cache/
+frontend/dist/
+frontend/.next/
+frontend/web-build/
+frontend/expo-env.d.ts
+backend/cool-academy-464906-j0-3ad32381cbfe.json:1
+# Python (backend)
+backend/.venv/
+backend/venv/
+backend/__pycache__/
+backend/.pytest_cache/
+backend/.mypy_cache/
+
+# Environment files (DO NOT COMMIT)
+.env
+.env.*
+!.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Credential files (DO NOT COMMIT)
+backend/cool-academy-464906-j0-3ad32381cbfe.json
+backend/*credentials*.json
+backend/*secret*.json
+backend/*service-account*.json
+backend/*key*.json
+frontend/android/app/google-services.json
+frontend/ios/GoogleService-Info.plist
+*.jks
+*.keystore
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+
+# Build artefacts (generic)
+dist/
+build/
+
+# Native mobile build artefacts
+frontend/android/.gradle/
+frontend/android/local.properties
+frontend/android/**/.cxx/
+frontend/android/**/build/
+*.apk
+*.aab

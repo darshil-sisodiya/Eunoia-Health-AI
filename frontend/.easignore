@@ -1,0 +1,19 @@
+# Exclude unnecessary files to reduce EAS upload size
+node_modules/
+# Dependencies are restored on build workers
+
+.expo/
+.metro-cache/
+.npm/
+.git/
+.gitignore
+Dockerfile
+**/*.ps1
+# Backend folder not needed for mobile build
+../backend/
+# Logs & temp
+*.log
+npm-debug.log*
+
+# Local env (variables already injected via EAS)
+.env
