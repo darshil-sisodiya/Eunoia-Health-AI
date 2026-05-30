@@ -15,13 +15,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../../contexts/AuthContext';
 import axios from 'axios';
 import { API_BASE_URL } from '../../utils/api';
+import { getReports, type AnalyzeRiskResponse } from '../../utils/onboardingApi';
 import { useRouter } from 'expo-router';
 import { colors, spacing, shadows, typography } from '../../constants/theme';
-import Svg, { Circle, Defs, LinearGradient as SvgGradient, Stop } from 'react-native-svg';
+import Svg, { Circle } from 'react-native-svg';
 import { Pedometer } from 'expo-sensors';
 import * as Linking from 'expo-linking';
 
@@ -30,39 +30,32 @@ const SCREEN_WIDTH = Dimensions.get('window').width;
 const DAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const STEP_GOAL_DEFAULT = 6000;
 
-// ─── Circular Progress with Gradient ──────────────────────────────
+// ─── Circular Progress (Monochrome on dark hero) ─────────────────
 function StepCircle({ steps, goal }: { steps: number; goal: number }) {
-  const size = 130;
-  const strokeWidth = 10;
+  const size = 156;
+  const strokeWidth = 8;
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const progress = Math.min(steps / goal, 1);
   const strokeDashoffset = circumference * (1 - progress);
+  const pct = Math.round(progress * 100);
 
   return (
     <View style={styles.stepCircleContainer}>
       <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }] }}>
-        <Defs>
-          <SvgGradient id="progressGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-            <Stop offset="0%" stopColor="#10B981" />
-            <Stop offset="100%" stopColor="#34D399" />
-          </SvgGradient>
-        </Defs>
-        {/* Background track */}
         <Circle
           cx={size / 2}
           cy={size / 2}
           r={radius}
-          stroke="rgba(255,255,255,0.25)"
+          stroke="rgba(255,255,255,0.10)"
           strokeWidth={strokeWidth}
           fill="none"
         />
-        {/* Progress ring with gradient */}
         <Circle
           cx={size / 2}
           cy={size / 2}
           r={radius}
-          stroke="#fff"
+          stroke={colors.textInverse}
           strokeWidth={strokeWidth}
           fill="none"
           strokeDasharray={`${circumference}`}
@@ -72,14 +65,13 @@ function StepCircle({ steps, goal }: { steps: number; goal: number }) {
       </Svg>
       <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }] as any}>
         <Text style={styles.stepCountText}>{steps.toLocaleString()}</Text>
-        <Text style={styles.stepLabel}>steps</Text>
-        <Text style={styles.goalText}>of {goal.toLocaleString()}</Text>
+        <Text style={styles.stepLabel}>STEPS · {pct}%</Text>
       </View>
     </View>
   );
 }
 
-// ─── Mini Week Calendar ─────────────────────────────────────────
+// ─── Mini Week Calendar (monochrome dots) ───────────────────────
 function WeekCalendar({ weekData }: { weekData: any[] }) {
   const todayIndex = new Date().getDay();
   return (
@@ -95,9 +87,9 @@ function WeekCalendar({ weekData }: { weekData: any[] }) {
             <View
               style={[
                 styles.weekDot,
-                isToday && styles.weekDotToday,
+                hasSteps && styles.weekDotPartial,
                 reachedGoal && styles.weekDotSuccess,
-                hasSteps && !reachedGoal && !isToday && styles.weekDotPartial,
+                isToday && styles.weekDotToday,
               ]}
             >
               {isToday && <View style={styles.weekDotInner} />}
@@ -109,7 +101,7 @@ function WeekCalendar({ weekData }: { weekData: any[] }) {
   );
 }
 
-// ─── Activity Bar Chart ─────────────────────────────────────────
+// ─── Activity Bar Chart (monochrome with cobalt accent) ────────
 function ActivityBarChart({ weekData, meditationData }: { weekData: any[]; meditationData: any[] }) {
   const maxSteps = Math.max(...weekData.map((d: any) => d.step_count || 0), 1);
   const maxMed = Math.max(...meditationData.map((d: any) => d.total_seconds || 0), 1);
@@ -121,22 +113,28 @@ function ActivityBarChart({ weekData, meditationData }: { weekData: any[]; medit
         {DAY_LABELS.map((label, i) => {
           const daySteps = weekData[i]?.step_count || 0;
           const dayMed = meditationData[i]?.total_seconds || 0;
-          const stepH = Math.max((daySteps / maxSteps) * 80, 6);
-          const medH = Math.max((dayMed / maxMed) * 80, dayMed > 0 ? 6 : 0);
+          const stepH = Math.max((daySteps / maxSteps) * 96, daySteps > 0 ? 8 : 4);
+          const medH = Math.max((dayMed / maxMed) * 96, dayMed > 0 ? 8 : 0);
           const goalReached = weekData[i]?.goal_reached;
           const isToday = i === todayIndex;
           return (
             <View key={`chart-${label}-${i}`} style={styles.chartBarGroup}>
               <View style={styles.barPair}>
-                <LinearGradient
-                  colors={goalReached ? ['#10B981', '#34D399'] : isToday ? ['#E2E8F0', '#CBD5E1'] : ['#F1F5F9', '#E2E8F0']}
-                  style={[styles.bar, { height: stepH }]}
+                <View
+                  style={[
+                    styles.bar,
+                    { height: stepH },
+                    goalReached
+                      ? styles.barFilled
+                      : isToday
+                      ? styles.barToday
+                      : daySteps > 0
+                      ? styles.barPartial
+                      : styles.barEmpty,
+                  ]}
                 />
                 {medH > 0 && (
-                  <LinearGradient
-                    colors={['#4F46E5', '#818CF8']}
-                    style={[styles.bar, { height: medH, marginLeft: 4, width: 8 }]}
-                  />
+                  <View style={[styles.bar, styles.barMeditation, { height: medH, marginLeft: 4, width: 6 }]} />
                 )}
               </View>
               <Text style={[styles.chartBarLabel, isToday && styles.chartBarLabelActive]}>{label}</Text>
@@ -146,11 +144,11 @@ function ActivityBarChart({ weekData, meditationData }: { weekData: any[]; medit
       </View>
       <View style={styles.chartLegend}>
         <View style={styles.legendItem}>
-          <View style={[styles.legendDot, { backgroundColor: '#10B981' }]} />
+          <View style={[styles.legendDot, { backgroundColor: colors.textPrimary }]} />
           <Text style={styles.legendText}>Steps</Text>
         </View>
         <View style={styles.legendItem}>
-          <View style={[styles.legendDot, { backgroundColor: '#4F46E5' }]} />
+          <View style={[styles.legendDot, { backgroundColor: colors.accent }]} />
           <Text style={styles.legendText}>Meditation</Text>
         </View>
       </View>
@@ -160,11 +158,11 @@ function ActivityBarChart({ weekData, meditationData }: { weekData: any[]; medit
 
 // ─── Meditation Timer Modal ─────────────────────────────────────
 const TIMER_PRESETS = [
-  { label: '1 min', seconds: 60 },
-  { label: '3 min', seconds: 180 },
-  { label: '5 min', seconds: 300 },
-  { label: '10 min', seconds: 600 },
-  { label: '15 min', seconds: 900 },
+  { label: '1m', seconds: 60 },
+  { label: '3m', seconds: 180 },
+  { label: '5m', seconds: 300 },
+  { label: '10m', seconds: 600 },
+  { label: '15m', seconds: 900 },
 ];
 
 function MeditationModal({
@@ -183,9 +181,7 @@ function MeditationModal({
   const totalRef = useRef(TIMER_PRESETS[1].seconds);
 
   useEffect(() => {
-    if (!visible) {
-      reset();
-    }
+    if (!visible) reset();
   }, [visible]);
 
   const reset = () => {
@@ -217,9 +213,7 @@ function MeditationModal({
     if (intervalRef.current) clearInterval(intervalRef.current);
     const elapsed = totalRef.current - remainingSeconds;
     setIsRunning(false);
-    if (elapsed >= 10) {
-      onComplete(elapsed);
-    }
+    if (elapsed >= 10) onComplete(elapsed);
   };
 
   const formatTime = (s: number) => {
@@ -229,8 +223,8 @@ function MeditationModal({
   };
 
   const progress = isRunning || remainingSeconds === 0 ? 1 - remainingSeconds / totalRef.current : 0;
-  const circSize = 200;
-  const circStroke = 10;
+  const circSize = 220;
+  const circStroke = 6;
   const circRadius = (circSize - circStroke) / 2;
   const circCircumference = 2 * Math.PI * circRadius;
 
@@ -240,25 +234,22 @@ function MeditationModal({
         <View style={styles.modalContent}>
           <View style={styles.modalHandle} />
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Meditation</Text>
-            <TouchableOpacity onPress={onClose} style={styles.modalCloseBtn}>
-              <Ionicons name="close" size={24} color={colors.textSecondary} />
+            <View>
+              <Text style={styles.modalEyebrow}>Session</Text>
+              <Text style={styles.modalTitle}>Meditation</Text>
+            </View>
+            <TouchableOpacity onPress={onClose} style={styles.modalCloseBtn} activeOpacity={0.7}>
+              <Ionicons name="close" size={20} color={colors.textPrimary} />
             </TouchableOpacity>
           </View>
 
-          <View style={{ alignItems: 'center', marginVertical: 32 }}>
+          <View style={{ alignItems: 'center', marginVertical: 36 }}>
             <Svg width={circSize} height={circSize} style={{ transform: [{ rotate: '-90deg' }] }}>
-              <Defs>
-                <SvgGradient id="meditationGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <Stop offset="0%" stopColor="#4F46E5" />
-                  <Stop offset="100%" stopColor="#818CF8" />
-                </SvgGradient>
-              </Defs>
               <Circle
                 cx={circSize / 2}
                 cy={circSize / 2}
                 r={circRadius}
-                stroke="#E2E8F0"
+                stroke={colors.divider}
                 strokeWidth={circStroke}
                 fill="none"
               />
@@ -266,7 +257,7 @@ function MeditationModal({
                 cx={circSize / 2}
                 cy={circSize / 2}
                 r={circRadius}
-                stroke="url(#meditationGradient)"
+                stroke={colors.textPrimary}
                 strokeWidth={circStroke}
                 fill="none"
                 strokeDasharray={`${circCircumference}`}
@@ -276,7 +267,7 @@ function MeditationModal({
             </Svg>
             <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }] as any}>
               <Text style={styles.timerText}>{formatTime(remainingSeconds)}</Text>
-              <Text style={styles.timerLabel}>remaining</Text>
+              <Text style={styles.timerLabel}>REMAINING</Text>
             </View>
           </View>
 
@@ -290,6 +281,7 @@ function MeditationModal({
                     setSelectedPreset(idx);
                     setRemainingSeconds(p.seconds);
                   }}
+                  activeOpacity={0.85}
                 >
                   <Text style={[styles.presetChipText, idx === selectedPreset && styles.presetChipTextActive]}>
                     {p.label}
@@ -299,27 +291,25 @@ function MeditationModal({
             </View>
           )}
 
-          <View style={{ alignItems: 'center', marginTop: 28 }}>
+          <View style={{ alignItems: 'center', marginTop: 32 }}>
             {!isRunning && remainingSeconds > 0 && (
-              <TouchableOpacity onPress={startTimer} activeOpacity={0.8}>
-                <LinearGradient colors={['#4F46E5', '#6366F1']} style={styles.meditationStartBtn}>
-                  <Ionicons name="play" size={22} color="#fff" />
-                  <Text style={styles.meditationStartBtnText}>Start Session</Text>
-                </LinearGradient>
+              <TouchableOpacity onPress={startTimer} activeOpacity={0.9} style={styles.meditationStartBtn}>
+                <Ionicons name="play" size={18} color={colors.textInverse} />
+                <Text style={styles.meditationStartBtnText}>Begin session</Text>
               </TouchableOpacity>
             )}
             {isRunning && (
-              <TouchableOpacity style={styles.meditationStopBtn} onPress={stopTimer} activeOpacity={0.8}>
-                <Ionicons name="stop" size={22} color="#fff" />
-                <Text style={styles.meditationStartBtnText}>End Session</Text>
+              <TouchableOpacity style={styles.meditationStopBtn} onPress={stopTimer} activeOpacity={0.9}>
+                <Ionicons name="stop" size={18} color={colors.textPrimary} />
+                <Text style={styles.meditationStopBtnText}>End session</Text>
               </TouchableOpacity>
             )}
             {remainingSeconds === 0 && (
               <View style={{ alignItems: 'center' }}>
                 <View style={styles.completedIcon}>
-                  <Ionicons name="checkmark" size={36} color="#fff" />
+                  <Ionicons name="checkmark" size={28} color={colors.textInverse} />
                 </View>
-                <Text style={styles.completedText}>Session Complete!</Text>
+                <Text style={styles.completedText}>Session complete</Text>
               </View>
             )}
           </View>
@@ -327,6 +317,155 @@ function MeditationModal({
       </View>
     </Modal>
   );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ─── Risk Score Card ────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+
+function RiskScoreCard({
+  report,
+  onPress,
+}: {
+  report: AnalyzeRiskResponse | null;
+  onPress: () => void;
+}) {
+  const hasReport = report !== null;
+  const score = hasReport ? report!.wellness_score : null;
+  const riskLevel = hasReport ? report!.risk_level : null;
+
+  // Map risk level → semantic accent + soft surface (existing tokens only).
+  const riskTone =
+    riskLevel === 'High'
+      ? { fg: colors.error, bg: colors.errorSoft, dot: colors.error }
+      : riskLevel === 'Moderate'
+      ? { fg: colors.warning, bg: colors.warningSoft, dot: colors.warning }
+      : { fg: colors.success, bg: colors.successSoft, dot: colors.success };
+
+  return (
+    <View style={riskCardStyles.section}>
+      <View style={riskCardStyles.sectionHeader}>
+        <View style={riskCardStyles.sectionHeaderLeft}>
+          <Text style={riskCardStyles.sectionEyebrow}>01</Text>
+          <Text style={riskCardStyles.sectionTitle}>Risk Score</Text>
+        </View>
+        {hasReport && (
+          <Text style={riskCardStyles.sectionMeta}>
+            {formatShortDate(report!.created_at)}
+          </Text>
+        )}
+      </View>
+
+      <TouchableOpacity
+        style={riskCardStyles.card}
+        onPress={onPress}
+        activeOpacity={0.85}
+        accessibilityRole="button"
+        accessibilityLabel={
+          hasReport
+            ? `Open health report. Wellness score ${score} out of 100. Risk level ${riskLevel}.`
+            : 'Start onboarding to generate your health report.'
+        }
+      >
+        {hasReport ? (
+          <>
+            <View style={riskCardStyles.cardLeft}>
+              <Text style={riskCardStyles.scoreLabel}>WELLNESS</Text>
+              <View style={riskCardStyles.scoreRow}>
+                <Text style={riskCardStyles.scoreValue}>{score}</Text>
+                <Text style={riskCardStyles.scoreSuffix}>/100</Text>
+              </View>
+              <View
+                style={[
+                  riskCardStyles.riskBadge,
+                  { backgroundColor: riskTone.bg, borderColor: riskTone.fg },
+                ]}
+              >
+                <View
+                  style={[riskCardStyles.riskDot, { backgroundColor: riskTone.dot }]}
+                />
+                <Text style={[riskCardStyles.riskBadgeText, { color: riskTone.fg }]}>
+                  {(riskLevel ?? '').toUpperCase()} RISK
+                </Text>
+              </View>
+            </View>
+
+            <View style={riskCardStyles.cardRight}>
+              <View style={riskCardStyles.miniBars}>
+                {aggregateByComponent(report!.contributing_factors).map((row) => (
+                  <View key={row.component} style={riskCardStyles.miniBarRow}>
+                    <Text style={riskCardStyles.miniBarLabel} numberOfLines={1}>
+                      {row.component}
+                    </Text>
+                    <View style={riskCardStyles.miniBarTrack}>
+                      <View
+                        style={[
+                          riskCardStyles.miniBarFill,
+                          { width: `${Math.max(row.intensity * 100, 6)}%` },
+                        ]}
+                      />
+                    </View>
+                  </View>
+                ))}
+              </View>
+              <View style={riskCardStyles.cardCta}>
+                <Text style={riskCardStyles.cardCtaText}>View report</Text>
+                <Ionicons name="arrow-forward" size={14} color={colors.textPrimary} />
+              </View>
+            </View>
+          </>
+        ) : (
+          <View style={riskCardStyles.emptyState}>
+            <View style={riskCardStyles.emptyIcon}>
+              <Ionicons name="pulse" size={20} color={colors.textPrimary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={riskCardStyles.emptyTitle}>No report yet</Text>
+              <Text style={riskCardStyles.emptyBody}>
+                Complete onboarding to generate your wellness score.
+              </Text>
+            </View>
+            <Ionicons name="arrow-forward" size={16} color={colors.textTertiary} />
+          </View>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function formatShortDate(iso: string | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+// Bucket contributing factors by their component so the dashboard mini-bars
+// show one row per bucket (cardiovascular / metabolic / wellness / hereditary)
+// rather than repeating the same component label when multiple `dimension`s
+// share a bucket. Magnitudes are summed within a bucket and the largest
+// bucket scales to 100%; everything else is relative to it. Buckets with a
+// total of zero are dropped so empty rows don't render.
+function aggregateByComponent(
+  factors: AnalyzeRiskResponse['contributing_factors'],
+): { component: string; intensity: number }[] {
+  const totals = new Map<string, number>();
+  for (const f of factors) {
+    if (!f || typeof f.component !== 'string') continue;
+    const prev = totals.get(f.component) ?? 0;
+    totals.set(f.component, prev + Math.abs(Number(f.delta) || 0));
+  }
+  const rows = Array.from(totals.entries())
+    .filter(([, total]) => total > 0)
+    .map(([component, total]) => ({ component, total }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 4);
+  if (rows.length === 0) return [];
+  const max = rows[0].total || 1;
+  return rows.map((r) => ({
+    component: r.component,
+    intensity: Math.min(r.total / max, 1),
+  }));
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -348,6 +487,8 @@ export default function Home() {
   const [meditationWeek, setMeditationWeek] = useState<any[]>([]);
   const [totalMeditationMin, setTotalMeditationMin] = useState(0);
   const [showMeditation, setShowMeditation] = useState(false);
+
+  const [latestReport, setLatestReport] = useState<AnalyzeRiskResponse | null>(null);
 
   const [isPedometerAvailable, setIsPedometerAvailable] = useState(false);
   const pedometerSub = useRef<any>(null);
@@ -427,10 +568,11 @@ export default function Home() {
       setRefreshing(true);
       try {
         const headers = { Authorization: `Bearer ${token}` };
-        const [weekRes, analysisRes, medRes] = await Promise.all([
+        const [weekRes, analysisRes, medRes, reportsResult] = await Promise.all([
           axios.get(`${BACKEND_URL}/api/steps/week`, { headers }).catch(() => null),
           axios.get(`${BACKEND_URL}/api/steps/analysis`, { headers }).catch(() => null),
           axios.get(`${BACKEND_URL}/api/meditation/week`, { headers }).catch(() => null),
+          getReports(token ?? '').catch(() => null),
         ]);
 
         if (weekRes?.data) {
@@ -454,6 +596,11 @@ export default function Home() {
           const mappedMed = mapMeditationToSunSat(medRes.data.days);
           setMeditationWeek(mappedMed);
           setTotalMeditationMin(medRes.data.total_minutes);
+        }
+        if (Array.isArray(reportsResult) && reportsResult.length > 0) {
+          setLatestReport(reportsResult[0]);
+        } else if (Array.isArray(reportsResult)) {
+          setLatestReport(null);
         }
       } catch (e) {
         console.error('Error loading home data', e);
@@ -515,10 +662,14 @@ export default function Home() {
     return 'Good evening';
   };
 
+  const trendIcon = walkingTrend === 'up' ? 'trending-up' : walkingTrend === 'down' ? 'trending-down' : 'pulse';
+  const trendColor = walkingTrend === 'up' ? colors.success : walkingTrend === 'down' ? colors.error : colors.accent;
+  const totalWeekSteps = weekSteps.reduce((sum, d) => sum + (d.step_count || 0), 0);
+
   if (isLoading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={colors.accent} />
+        <ActivityIndicator size="small" color={colors.textTertiary} />
       </View>
     );
   }
@@ -527,136 +678,200 @@ export default function Home() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.textTertiary}
+          />
+        }
         contentContainerStyle={styles.scrollContent}
       >
-        {/* ── Hero Header ─────────────────────────────────── */}
-        <LinearGradient colors={['#4F46E5', '#6366F1', '#818CF8']} style={styles.heroHeader} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
-          <View style={styles.headerContent}>
-            <View style={styles.headerTop}>
-              <View>
-                <Text style={styles.greetingText}>{getGreeting()}</Text>
-                <Text style={styles.usernameText}>{username || 'User'}</Text>
-              </View>
-              <TouchableOpacity
-                style={styles.profileBtn}
-                onPress={() => router.push('/(tabs)/profile')}
-              >
-                <Ionicons name="person" size={20} color={colors.accent} />
-              </TouchableOpacity>
-            </View>
+        {/* ── INK HERO HEADER ─────────────────────────────── */}
+        <View style={styles.heroHeader}>
+          <View style={styles.heroNoiseOverlay} pointerEvents="none" />
+          <View style={styles.heroAccentGlow} pointerEvents="none" />
 
-            {/* Step Progress */}
-            <View style={styles.stepProgressContainer}>
-              <StepCircle steps={todaySteps} goal={stepGoal} />
-              <View style={styles.stepInfoContainer}>
-                <View style={styles.stepInfoRow}>
-                  <Ionicons name="flame" size={20} color="#F59E0B" />
-                  <Text style={styles.stepInfoLabel}>Daily Goal</Text>
-                  <Text style={styles.stepInfoValue}>{stepGoal.toLocaleString()}</Text>
-                </View>
-                <View style={styles.stepInfoRow}>
-                  <Ionicons name="trophy" size={20} color="#10B981" />
-                  <Text style={styles.stepInfoLabel}>This Week</Text>
-                  <Text style={styles.stepInfoValue}>{goalsReached}/7 days</Text>
-                </View>
-                <WeekCalendar weekData={weekSteps} />
+          <View style={styles.headerTop}>
+            <View>
+              <Text style={styles.greetingText}>{getGreeting().toUpperCase()}</Text>
+              <Text style={styles.usernameText}>{username || 'User'}</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.profileBtn}
+              onPress={() => router.push('/(tabs)/profile')}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="person-outline" size={18} color={colors.textInverse} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.heroRule} />
+
+          {/* Step ring + meta */}
+          <View style={styles.stepProgressContainer}>
+            <StepCircle steps={todaySteps} goal={stepGoal} />
+            <View style={styles.stepInfoContainer}>
+              <View style={styles.stepInfoRow}>
+                <Text style={styles.stepInfoKey}>Daily target</Text>
+                <Text style={styles.stepInfoValue}>{stepGoal.toLocaleString()}</Text>
               </View>
+              <View style={styles.stepInfoDivider} />
+              <View style={styles.stepInfoRow}>
+                <Text style={styles.stepInfoKey}>This week</Text>
+                <Text style={styles.stepInfoValue}>{goalsReached} / 7</Text>
+              </View>
+              <View style={styles.stepInfoDivider} />
+              <WeekCalendar weekData={weekSteps} />
             </View>
           </View>
-        </LinearGradient>
+        </View>
 
-        {/* ── Quick Actions ────────────────────────────────── */}
+        {/* ── QUICK ACTIONS ────────────────────────────────── */}
         <View style={styles.quickActionsContainer}>
           <TouchableOpacity
             style={styles.quickActionCard}
             onPress={() => router.push('/(tabs)/chat')}
-            activeOpacity={0.8}
+            activeOpacity={0.85}
           >
-            <LinearGradient colors={['#EEF2FF', '#E0E7FF']} style={styles.quickActionGradient}>
+            <View style={styles.quickActionTop}>
               <View style={styles.quickActionIcon}>
-                <Ionicons name="chatbubbles" size={24} color={colors.accent} />
+                <Ionicons name="sparkles" size={18} color={colors.textPrimary} />
               </View>
+              <Ionicons name="arrow-forward" size={16} color={colors.textTertiary} />
+            </View>
+            <View>
               <Text style={styles.quickActionTitle}>Health AI</Text>
               <Text style={styles.quickActionSubtitle}>Chat with your assistant</Text>
-            </LinearGradient>
+            </View>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.quickActionCard}
             onPress={() => setShowMeditation(true)}
-            activeOpacity={0.8}
+            activeOpacity={0.85}
           >
-            <LinearGradient colors={['#ECFDF5', '#D1FAE5']} style={styles.quickActionGradient}>
-              <View style={[styles.quickActionIcon, { backgroundColor: '#10B98133' }]}>
-                <Ionicons name="leaf" size={24} color="#10B981" />
+            <View style={styles.quickActionTop}>
+              <View style={styles.quickActionIcon}>
+                <Ionicons name="leaf-outline" size={18} color={colors.textPrimary} />
               </View>
+              <Ionicons name="arrow-forward" size={16} color={colors.textTertiary} />
+            </View>
+            <View>
               <Text style={styles.quickActionTitle}>Meditate</Text>
               <Text style={styles.quickActionSubtitle}>{totalMeditationMin} min this week</Text>
-            </LinearGradient>
+            </View>
           </TouchableOpacity>
         </View>
 
-        {/* ── Health Insights ──────────────────────────────── */}
+        {/* ── COST ESTIMATOR ENTRY ─────────────────────────── */}
+        <TouchableOpacity
+          style={costEstimatorStyles.card}
+          onPress={() => router.push('/cost-estimator' as any)}
+          activeOpacity={0.9}
+          accessibilityRole="button"
+          accessibilityLabel="Open medical cost estimator"
+        >
+          <View style={costEstimatorStyles.left}>
+            <View style={costEstimatorStyles.iconBg}>
+              <Ionicons name="calculator-outline" size={18} color={colors.textPrimary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={costEstimatorStyles.eyebrow}>NEW</Text>
+              <Text style={costEstimatorStyles.title}>Medical cost estimator</Text>
+              <Text style={costEstimatorStyles.subtitle}>
+                Approximate ranges by city, condition, and hospital tier
+              </Text>
+            </View>
+          </View>
+          <Ionicons name="arrow-forward" size={16} color={colors.textTertiary} />
+        </TouchableOpacity>
+
+        {/* ── RISK SCORE ────────────────────────────────────── */}
+        <RiskScoreCard
+          report={latestReport}
+          onPress={() => {
+            if (latestReport) {
+              router.push({
+                pathname: '/risk-detail' as any,
+                params: { id: String(latestReport.report_id) },
+              });
+            } else {
+              router.push('/onboarding/welcome' as any);
+            }
+          }}
+        />
+
+        {/* ── HEALTH INSIGHTS ──────────────────────────────── */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Health Insights</Text>
+            <View style={styles.sectionHeaderLeft}>
+              <Text style={styles.sectionEyebrow}>02</Text>
+              <Text style={styles.sectionTitle}>Health Insights</Text>
+            </View>
             <View style={styles.sectionBadge}>
-              <Ionicons name="sparkles" size={12} color={colors.accent} />
+              <View style={styles.sectionBadgeDot} />
               <Text style={styles.sectionBadgeText}>AI</Text>
             </View>
           </View>
 
           <View style={styles.insightCard}>
             <View style={styles.insightIconContainer}>
-              <Ionicons
-                name={walkingTrend === 'up' ? 'trending-up' : walkingTrend === 'down' ? 'trending-down' : 'pulse'}
-                size={24}
-                color={walkingTrend === 'up' ? '#10B981' : walkingTrend === 'down' ? '#EF4444' : colors.accent}
-              />
+              <Ionicons name={trendIcon as any} size={20} color={trendColor} />
             </View>
             <View style={styles.insightContent}>
-              <Text style={styles.insightTitle}>Walking Analysis</Text>
-              <Text style={styles.insightText} numberOfLines={3}>
-                {walkingAnalysis || 'Start tracking your steps to get personalized insights!'}
+              <Text style={styles.insightOverline}>Walking Analysis</Text>
+              <Text style={styles.insightText} numberOfLines={4}>
+                {walkingAnalysis || 'Start tracking your steps to receive personalized insights.'}
               </Text>
             </View>
           </View>
         </View>
 
-        {/* ── Weekly Activity ──────────────────────────────── */}
+        {/* ── WEEKLY ACTIVITY ──────────────────────────────── */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Weekly Activity</Text>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionHeaderLeft}>
+              <Text style={styles.sectionEyebrow}>03</Text>
+              <Text style={styles.sectionTitle}>Weekly Activity</Text>
+            </View>
+            <Text style={styles.sectionMeta}>{(totalWeekSteps / 1000).toFixed(1)}k</Text>
+          </View>
           <ActivityBarChart weekData={weekSteps} meditationData={meditationWeek} />
         </View>
 
-        {/* ── Stats Grid ───────────────────────────────────── */}
-        <View style={styles.statsGrid}>
-          <View style={styles.statCard}>
-            <LinearGradient colors={['#FEF3C7', '#FDE68A']} style={styles.statIconBg}>
-              <Ionicons name="flag" size={20} color="#D97706" />
-            </LinearGradient>
-            <Text style={styles.statValue}>{goalsReached}</Text>
-            <Text style={styles.statLabel}>Goals Hit</Text>
+        {/* ── STATS GRID ───────────────────────────────────── */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionHeaderLeft}>
+              <Text style={styles.sectionEyebrow}>04</Text>
+              <Text style={styles.sectionTitle}>Vitals</Text>
+            </View>
           </View>
+          <View style={styles.statsGrid}>
+            <View style={styles.statCard}>
+              <Text style={styles.statLabel}>GOALS HIT</Text>
+              <Text style={styles.statValue}>{goalsReached}</Text>
+              <Text style={styles.statUnit}>this week</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statLabel}>MINDFUL</Text>
+              <Text style={styles.statValue}>{totalMeditationMin}</Text>
+              <Text style={styles.statUnit}>minutes</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statLabel}>STEPS</Text>
+              <Text style={styles.statValue}>
+                {Math.round(totalWeekSteps / 1000)}<Text style={styles.statValueUnit}>k</Text>
+              </Text>
+              <Text style={styles.statUnit}>weekly</Text>
+            </View>
+          </View>
+        </View>
 
-          <View style={styles.statCard}>
-            <LinearGradient colors={['#DBEAFE', '#BFDBFE']} style={styles.statIconBg}>
-              <Ionicons name="leaf" size={20} color="#3B82F6" />
-            </LinearGradient>
-            <Text style={styles.statValue}>{totalMeditationMin}</Text>
-            <Text style={styles.statLabel}>Mindful Min</Text>
-          </View>
-
-          <View style={styles.statCard}>
-            <LinearGradient colors={['#D1FAE5', '#A7F3D0']} style={styles.statIconBg}>
-              <Ionicons name="footsteps" size={20} color="#059669" />
-            </LinearGradient>
-            <Text style={styles.statValue}>
-              {Math.round(weekSteps.reduce((sum, d) => sum + (d.step_count || 0), 0) / 1000)}k
-            </Text>
-            <Text style={styles.statLabel}>Week Steps</Text>
-          </View>
+        <View style={styles.footerMark}>
+          <View style={styles.footerDot} />
+          <Text style={styles.footerText}>EUNOIA</Text>
         </View>
       </ScrollView>
 
@@ -685,68 +900,91 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   scrollContent: {
-    paddingBottom: 120,
+    paddingBottom: 140,
   },
 
-  // Hero Header
+  // ─── Hero (ink surface) ───────────────────────────────────
   heroHeader: {
+    backgroundColor: colors.inkSurface,
     paddingTop: spacing.lg,
-    paddingBottom: spacing.xxxl,
+    paddingBottom: 56,
     paddingHorizontal: spacing.screenPadding,
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    overflow: 'hidden',
+    position: 'relative',
   },
-  headerContent: {
-    gap: spacing.xxl,
+  heroNoiseOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255,255,255,0.02)',
+  },
+  heroAccentGlow: {
+    position: 'absolute',
+    top: -120,
+    right: -80,
+    width: 280,
+    height: 280,
+    borderRadius: 140,
+    backgroundColor: colors.accent,
+    opacity: 0.18,
   },
   headerTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    marginBottom: spacing.lg,
   },
   greetingText: {
-    ...typography.caption,
-    color: 'rgba(255,255,255,0.85)',
+    ...typography.overline,
+    color: colors.textInverseSubtle,
   },
   usernameText: {
     ...typography.largeTitle,
-    color: '#fff',
-    marginTop: 4,
+    color: colors.textInverse,
+    marginTop: 6,
   },
   profileBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#fff',
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: colors.inkBorderStrong,
     alignItems: 'center',
     justifyContent: 'center',
-    ...shadows.md,
+  },
+  heroRule: {
+    height: 1,
+    backgroundColor: colors.inkBorder,
+    marginVertical: spacing.lg,
   },
 
-  // Step Progress
-  stepCircleContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 130,
-    height: 130,
-  },
+  // ─── Step Progress ───────────────────────────────────────
   stepProgressContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xl,
+    marginTop: spacing.sm,
+  },
+  stepCircleContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 156,
+    height: 156,
   },
   stepCountText: {
     ...typography.numericLarge,
-    color: '#fff',
+    fontSize: 36,
+    color: colors.textInverse,
   },
   stepLabel: {
     ...typography.overline,
-    color: 'rgba(255,255,255,0.85)',
-    marginTop: -2,
-  },
-  goalText: {
-    ...typography.captionSmall,
-    color: 'rgba(255,255,255,0.7)',
+    fontSize: 10,
+    color: colors.textInverseSubtle,
     marginTop: 4,
   },
   stepInfoContainer: {
@@ -756,32 +994,28 @@ const styles = StyleSheet.create({
   stepInfoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 10,
+    justifyContent: 'space-between',
   },
-  stepInfoLabel: {
-    flex: 1,
+  stepInfoKey: {
     ...typography.caption,
-    color: 'rgba(255,255,255,0.9)',
+    color: colors.textInverseSubtle,
   },
   stepInfoValue: {
-    ...typography.caption,
+    ...typography.bodyMedium,
     fontWeight: '700',
-    color: '#fff',
+    color: colors.textInverse,
+  },
+  stepInfoDivider: {
+    height: 1,
+    backgroundColor: colors.inkBorder,
+    marginVertical: 2,
   },
 
   // Week Calendar
   weekContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: spacing.sm,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
+    marginTop: 4,
   },
   weekDayCol: {
     alignItems: 'center',
@@ -790,65 +1024,74 @@ const styles = StyleSheet.create({
   },
   weekDayLabel: {
     ...typography.overline,
-    fontSize: 10,
-    color: 'rgba(255,255,255,0.6)',
+    fontSize: 9,
+    color: colors.textInverseSubtle,
   },
   weekDayLabelActive: {
-    color: '#fff',
+    color: colors.textInverse,
   },
   weekDot: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.08)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  weekDotToday: {
-    backgroundColor: '#fff',
-  },
-  weekDotInner: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.accent,
-  },
-  weekDotSuccess: {
-    backgroundColor: '#10B981',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
   },
   weekDotPartial: {
-    backgroundColor: 'rgba(255,255,255,0.4)',
+    backgroundColor: 'rgba(255,255,255,0.30)',
+    borderColor: 'rgba(255,255,255,0.30)',
+  },
+  weekDotSuccess: {
+    backgroundColor: colors.textInverse,
+    borderColor: colors.textInverse,
+  },
+  weekDotToday: {
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
+  },
+  weekDotInner: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: colors.textInverse,
   },
 
-  // Quick Actions
+  // ─── Quick Actions ───────────────────────────────────────
   quickActionsContainer: {
     flexDirection: 'row',
     gap: spacing.md,
     paddingHorizontal: spacing.screenPadding,
-    marginTop: -24,
+    marginTop: -28,
     alignItems: 'stretch',
   },
   quickActionCard: {
     flex: 1,
-    borderRadius: 20,
-    overflow: 'hidden',
+    minHeight: 120,
+    borderRadius: spacing.cardRadiusLg,
+    padding: spacing.lg,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    justifyContent: 'space-between',
     ...shadows.lg,
   },
-  quickActionGradient: {
-    flex: 1,
-    padding: spacing.lg,
+  quickActionTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
   },
   quickActionIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    backgroundColor: 'rgba(79, 70, 229, 0.15)',
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: colors.backgroundTertiary,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
   },
   quickActionTitle: {
     ...typography.headline,
@@ -856,76 +1099,102 @@ const styles = StyleSheet.create({
   },
   quickActionSubtitle: {
     ...typography.caption,
-    color: colors.textSecondary,
+    color: colors.textTertiary,
+    marginTop: 2,
   },
 
-  // Section
+  // ─── Sections ────────────────────────────────────────────
   section: {
     paddingHorizontal: spacing.screenPadding,
-    marginTop: spacing.xxl,
+    marginTop: 40,
   },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    justifyContent: 'space-between',
     marginBottom: spacing.lg,
+  },
+  sectionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: spacing.md,
+  },
+  sectionEyebrow: {
+    ...typography.overline,
+    color: colors.textMuted,
+    fontVariant: ['tabular-nums'],
   },
   sectionTitle: {
     ...typography.title,
     color: colors.textPrimary,
   },
+  sectionMeta: {
+    ...typography.caption,
+    color: colors.textTertiary,
+    fontVariant: ['tabular-nums'],
+  },
   sectionBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: colors.accentLight,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: spacing.chipRadius,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+  },
+  sectionBadgeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.accent,
   },
   sectionBadgeText: {
     ...typography.overline,
     fontSize: 10,
-    color: colors.accent,
+    color: colors.textPrimary,
   },
 
-  // Insight Card
+  // ─── Insight Card ────────────────────────────────────────
   insightCard: {
     flexDirection: 'row',
     backgroundColor: colors.surface,
-    borderRadius: 16,
-    padding: spacing.lg,
-    gap: spacing.md,
+    borderRadius: spacing.cardRadiusLg,
+    padding: spacing.xl,
+    gap: spacing.lg,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
     ...shadows.sm,
   },
   insightIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     backgroundColor: colors.backgroundSecondary,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
   },
   insightContent: {
     flex: 1,
   },
-  insightTitle: {
-    ...typography.headline,
-    color: colors.textPrimary,
+  insightOverline: {
+    ...typography.overline,
+    color: colors.textTertiary,
     marginBottom: 6,
   },
   insightText: {
-    ...typography.callout,
-    color: colors.textSecondary,
+    ...typography.body,
+    color: colors.textPrimary,
   },
 
-  // Chart
+  // ─── Chart ───────────────────────────────────────────────
   chartContainer: {
     backgroundColor: colors.surface,
-    borderRadius: 20,
-    padding: spacing.lg,
+    borderRadius: spacing.cardRadiusLg,
+    padding: spacing.xl,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
     ...shadows.sm,
@@ -934,7 +1203,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
-    height: 100,
+    height: 120,
     marginBottom: spacing.md,
   },
   chartBarGroup: {
@@ -946,24 +1215,39 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   bar: {
-    width: 12,
-    borderRadius: 6,
+    width: 10,
+    borderRadius: 3,
+  },
+  barFilled: {
+    backgroundColor: colors.textPrimary,
+  },
+  barToday: {
+    backgroundColor: colors.neutral.mist,
+  },
+  barPartial: {
+    backgroundColor: colors.neutral.mist,
+  },
+  barEmpty: {
+    backgroundColor: colors.neutral.cloud,
+  },
+  barMeditation: {
+    backgroundColor: colors.accent,
   },
   chartBarLabel: {
     ...typography.overline,
     fontSize: 10,
     color: colors.textMuted,
-    marginTop: 8,
+    marginTop: 12,
   },
   chartBarLabelActive: {
     color: colors.textPrimary,
-    fontWeight: '700',
   },
   chartLegend: {
     flexDirection: 'row',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     gap: spacing.lg,
     paddingTop: spacing.md,
+    marginTop: spacing.sm,
     borderTopWidth: 1,
     borderTopColor: colors.divider,
   },
@@ -973,75 +1257,102 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   legendDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   legendText: {
     ...typography.captionSmall,
-    color: colors.textSecondary,
+    color: colors.textTertiary,
   },
 
-  // Stats Grid
+  // ─── Stats Grid ──────────────────────────────────────────
   statsGrid: {
     flexDirection: 'row',
     gap: spacing.md,
-    paddingHorizontal: spacing.screenPadding,
-    marginTop: spacing.xxl,
   },
   statCard: {
     flex: 1,
     backgroundColor: colors.surface,
-    borderRadius: 16,
+    borderRadius: spacing.cardRadiusLg,
     padding: spacing.lg,
-    alignItems: 'center',
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
-    ...shadows.sm,
+    minHeight: 110,
+    justifyContent: 'space-between',
   },
-  statIconBg: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.sm,
+  statLabel: {
+    ...typography.overline,
+    fontSize: 10,
+    color: colors.textMuted,
   },
   statValue: {
     ...typography.numeric,
     color: colors.textPrimary,
+    marginTop: 8,
   },
-  statLabel: {
-    ...typography.overline,
-    color: colors.textMuted,
-    marginTop: 4,
+  statValueUnit: {
+    ...typography.numeric,
+    color: colors.textTertiary,
+  },
+  statUnit: {
+    ...typography.caption,
+    color: colors.textTertiary,
+    marginTop: 2,
   },
 
-  // Modal
+  // ─── Footer mark ─────────────────────────────────────────
+  footerMark: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 56,
+  },
+  footerDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.accent,
+  },
+  footerText: {
+    ...typography.overline,
+    fontSize: 10,
+    color: colors.textMuted,
+  },
+
+  // ─── Modal ───────────────────────────────────────────────
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: colors.overlay,
     justifyContent: 'flex-end',
   },
   modalContent: {
     backgroundColor: colors.background,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     padding: spacing.xxl,
     paddingBottom: 48,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
   },
   modalHandle: {
-    width: 40,
+    width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: colors.divider,
+    backgroundColor: colors.dividerStrong,
     alignSelf: 'center',
     marginBottom: spacing.lg,
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+  },
+  modalEyebrow: {
+    ...typography.overline,
+    color: colors.textTertiary,
+    marginBottom: 4,
   },
   modalTitle: {
     ...typography.title,
@@ -1050,20 +1361,23 @@ const styles = StyleSheet.create({
   modalCloseBtn: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 10,
     backgroundColor: colors.backgroundSecondary,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
     alignItems: 'center',
     justifyContent: 'center',
   },
   timerText: {
     ...typography.display,
-    fontSize: 52,
+    fontSize: 56,
     color: colors.textPrimary,
+    fontVariant: ['tabular-nums'],
   },
   timerLabel: {
-    ...typography.caption,
-    color: colors.textMuted,
-    marginTop: -4,
+    ...typography.overline,
+    color: colors.textTertiary,
+    marginTop: 6,
   },
   presetRow: {
     flexDirection: 'row',
@@ -1074,14 +1388,14 @@ const styles = StyleSheet.create({
   presetChip: {
     paddingHorizontal: 18,
     paddingVertical: 10,
-    borderRadius: 20,
-    backgroundColor: colors.backgroundSecondary,
+    borderRadius: spacing.chipRadius,
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
   },
   presetChipActive: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
+    backgroundColor: colors.inkSurface,
+    borderColor: colors.inkSurface,
   },
   presetChipText: {
     ...typography.callout,
@@ -1089,42 +1403,258 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   presetChipTextActive: {
-    color: '#fff',
+    color: colors.textInverse,
   },
   meditationStartBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     paddingHorizontal: 32,
-    paddingVertical: 16,
-    borderRadius: 16,
+    paddingVertical: 14,
+    borderRadius: spacing.buttonRadius,
+    backgroundColor: colors.inkSurface,
     ...shadows.md,
   },
   meditationStopBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: '#EF4444',
     paddingHorizontal: 32,
-    paddingVertical: 16,
-    borderRadius: 16,
-    ...shadows.md,
+    paddingVertical: 14,
+    borderRadius: spacing.buttonRadius,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
   },
   meditationStartBtnText: {
     ...typography.headline,
-    color: '#fff',
+    color: colors.textInverse,
+  },
+  meditationStopBtnText: {
+    ...typography.headline,
+    color: colors.textPrimary,
   },
   completedIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#10B981',
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: colors.inkSurface,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: spacing.md,
   },
   completedText: {
     ...typography.headline,
-    color: '#10B981',
+    color: colors.textPrimary,
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ─── Risk Score Card Styles ─────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+
+const riskCardStyles = StyleSheet.create({
+  section: {
+    paddingHorizontal: spacing.screenPadding,
+    marginTop: 40,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.lg,
+  },
+  sectionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: spacing.md,
+  },
+  sectionEyebrow: {
+    ...typography.overline,
+    color: colors.textMuted,
+    fontVariant: ['tabular-nums'],
+  },
+  sectionTitle: {
+    ...typography.title,
+    color: colors.textPrimary,
+  },
+  sectionMeta: {
+    ...typography.caption,
+    color: colors.textTertiary,
+    fontVariant: ['tabular-nums'],
+  },
+
+  card: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderRadius: spacing.cardRadiusLg,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    padding: spacing.xl,
+    gap: spacing.xl,
+    ...shadows.sm,
+  },
+  cardLeft: {
+    flex: 1.1,
+    justifyContent: 'space-between',
+  },
+  cardRight: {
+    flex: 1,
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+
+  scoreLabel: {
+    ...typography.overline,
+    fontSize: 10,
+    color: colors.textMuted,
+    marginBottom: 6,
+  },
+  scoreRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 4,
+  },
+  scoreValue: {
+    ...typography.numericLarge,
+    color: colors.textPrimary,
+  },
+  scoreSuffix: {
+    ...typography.callout,
+    color: colors.textTertiary,
+  },
+
+  riskBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: spacing.chipRadius,
+    borderWidth: 1,
+    marginTop: spacing.md,
+  },
+  riskDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  riskBadgeText: {
+    ...typography.overline,
+    fontSize: 10,
+  },
+
+  miniBars: {
+    gap: 8,
+  },
+  miniBarRow: {
+    gap: 4,
+  },
+  miniBarLabel: {
+    ...typography.captionSmall,
+    color: colors.textTertiary,
+    textTransform: 'capitalize',
+  },
+  miniBarTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.skeleton,
+    overflow: 'hidden',
+  },
+  miniBarFill: {
+    height: '100%',
+    borderRadius: 3,
+    backgroundColor: colors.textPrimary,
+  },
+
+  cardCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-end',
+  },
+  cardCtaText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '600',
+  },
+
+  emptyState: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.lg,
+  },
+  emptyIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: colors.backgroundSecondary,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyTitle: {
+    ...typography.headline,
+    color: colors.textPrimary,
+  },
+  emptyBody: {
+    ...typography.caption,
+    color: colors.textTertiary,
+    marginTop: 2,
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ─── Cost Estimator entry card ─────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+
+const costEstimatorStyles = StyleSheet.create({
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.lg,
+    marginHorizontal: spacing.screenPadding,
+    marginTop: spacing.md,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    borderRadius: spacing.cardRadiusLg,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    ...shadows.sm,
+  },
+  left: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  iconBg: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: colors.backgroundTertiary,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  eyebrow: {
+    ...typography.overline,
+    fontSize: 9,
+    color: colors.accent,
+    marginBottom: 2,
+  },
+  title: {
+    ...typography.headline,
+    color: colors.textPrimary,
+  },
+  subtitle: {
+    ...typography.caption,
+    color: colors.textTertiary,
+    marginTop: 2,
   },
 });

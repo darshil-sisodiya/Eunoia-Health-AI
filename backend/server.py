@@ -1,12 +1,13 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field, ValidationError, field_validator
+from typing import List, Optional, Dict, Any, Literal
 import uuid
 from datetime import datetime, timedelta
 import jwt
@@ -22,6 +23,24 @@ import aiomysql
 
 # Google Gemini
 import google.generativeai as genai
+
+# Canonical Karnataka cities list for the public GET /api/cities endpoint
+# (Requirements 10.1, 10.2, 10.3, 10.4). The tuple is converted to a list at
+# import time so successive responses serialise to byte-identical JSON.
+from cities import KARNATAKA_CITIES_SORTED
+
+# Risk Engine (pure functions) and Gemini Insights service used by
+# POST /api/analyze-risk. Imported at module load so the path is bound once.
+from risk_engine import compute_risk
+import gemini_insights
+
+# Medical Cost Estimator (deterministic) + AI-assisted contextual refinement.
+# The estimator is a pure module that loads the Karnataka hospitals dataset
+# once at import time. ``cost_refiner`` is an async coroutine that asks
+# Gemini to refine the deterministic estimate within hard backend-defined
+# bounds; failures fall back to the deterministic baseline.
+import cost_estimator
+import cost_refiner
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -125,6 +144,25 @@ async def execute(query: str, params: tuple = ()) -> int:
             last_id = cur.lastrowid or 0
             await conn.commit()
             return last_id
+
+async def _ensure_column(cur, table: str, column: str, ddl: str) -> None:
+    """Idempotently add `column` to `table` with the given DDL.
+
+    Reads INFORMATION_SCHEMA.COLUMNS in the current database and only runs
+    `ALTER TABLE ... ADD COLUMN ...` when the column is not already present.
+    Never drops, renames, or retypes an existing column.
+    """
+    await cur.execute(
+        """
+        SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s
+        """,
+        (table, column),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        await cur.execute(f"ALTER TABLE `{table}` ADD COLUMN `{column}` {ddl}")
+
 
 async def init_db(conn: aiomysql.Connection):
     async with conn.cursor() as cur:
@@ -240,6 +278,87 @@ async def init_db(conn: aiomysql.Connection):
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             """
         )
+
+        # ---- Eunoia preventive onboarding redesign: idempotent migrations ----
+        # Requirement 12.1: extend users with name, email, preferred_city, preferred_state.
+        # `email` is already created above for fresh installs; calling _ensure_column
+        # is a no-op when the column exists, which is the safe path on legacy DBs too.
+        await _ensure_column(cur, "users", "name", "VARCHAR(80) NULL")
+        await _ensure_column(cur, "users", "email", "VARCHAR(255) NULL")
+        await _ensure_column(cur, "users", "preferred_city", "VARCHAR(64) NULL")
+        await _ensure_column(cur, "users", "preferred_state", "VARCHAR(64) NULL")
+
+        # Requirement 12.2: extend health_profiles with the redesigned columns.
+        # exercise_frequency and stress_level already exist on health_profiles
+        # (see CREATE TABLE above) and are intentionally NOT re-added here per
+        # the design note. _ensure_column would be a no-op for them anyway.
+        await _ensure_column(cur, "health_profiles", "age", "INT NULL")
+        await _ensure_column(cur, "health_profiles", "gender", "VARCHAR(32) NULL")
+        await _ensure_column(cur, "health_profiles", "height", "DECIMAL(6,2) NULL")
+        await _ensure_column(cur, "health_profiles", "weight", "DECIMAL(6,2) NULL")
+        await _ensure_column(cur, "health_profiles", "smoking", "VARCHAR(32) NULL")
+        await _ensure_column(cur, "health_profiles", "alcohol", "VARCHAR(32) NULL")
+        await _ensure_column(cur, "health_profiles", "sleep_quality", "VARCHAR(32) NULL")
+        await _ensure_column(cur, "health_profiles", "water_intake", "VARCHAR(32) NULL")
+
+        # Requirement 12.3: family_history with unique (user_id, condition) and ON DELETE CASCADE.
+        await cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS family_history (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                `condition` VARCHAR(64) NOT NULL,
+                created_at DATETIME NOT NULL,
+                UNIQUE KEY uq_user_condition (user_id, `condition`),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """
+        )
+
+        # Requirement 12.4, 12.6: risk_reports with risk_level ENUM and JSON columns.
+        await cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS risk_reports (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                risk_score INT NOT NULL,
+                risk_level ENUM('Low', 'Moderate', 'High') NOT NULL,
+                wellness_score INT NOT NULL,
+                contributing_factors JSON NOT NULL,
+                ai_analysis JSON NULL,
+                ai_insights_unavailable TINYINT(1) NOT NULL DEFAULT 0,
+                payload_snapshot JSON NOT NULL,
+                created_at DATETIME NOT NULL,
+                KEY idx_user_created (user_id, created_at),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """
+        )
+
+        # Cost Estimator history. One row per cost estimate snapshot. The
+        # response payload is JSON-encoded for future extensibility (insurance,
+        # appointment booking, historical comparison charts, etc.).
+        await cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cost_estimates (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                city VARCHAR(64) NOT NULL,
+                condition_label VARCHAR(96) NOT NULL,
+                condition_key VARCHAR(64) NOT NULL,
+                tier VARCHAR(16) NOT NULL,
+                severity VARCHAR(16) NOT NULL,
+                consultation_type VARCHAR(32) NOT NULL,
+                estimated_total_min INT NOT NULL,
+                estimated_total_max INT NOT NULL,
+                response_snapshot JSON NOT NULL,
+                created_at DATETIME NOT NULL,
+                KEY idx_user_created (user_id, created_at),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """
+        )
+
         await conn.commit()
 
 def to_dt(dt: datetime) -> datetime:
@@ -312,6 +431,113 @@ class ChatMessageResponse(BaseModel):
 class ChatHistoryResponse(BaseModel):
     messages: List[ChatMessageResponse]
 
+# ==================== ONBOARDING / RISK MODELS ====================
+
+# Hereditary conditions used by the Family History step (Requirement 6.1).
+HEREDITARY = {
+    'Diabetes',
+    'Hypertension',
+    'Heart Disease',
+    'Asthma',
+    'Cancer',
+    'Mental Health Disorders',
+    'Thyroid Disorders',
+    'Obesity',
+}
+
+
+class BasicProfile(BaseModel):
+    full_name: str = Field(min_length=1, max_length=80)
+    age: int = Field(ge=13, le=120)
+    gender: Literal['male', 'female', 'non_binary', 'prefer_not_to_say']
+    height_cm: float = Field(ge=80, le=250)
+    weight_kg: float = Field(ge=20, le=300)
+
+
+class Lifestyle(BaseModel):
+    smoking: Literal['never', 'former', 'occasional', 'regular']
+    alcohol: Literal['never', 'occasional', 'moderate', 'frequent']
+    exercise_frequency: Literal['never', 'occasional', 'regular', 'daily']
+    water_intake: Literal['low', 'moderate', 'high']
+    sleep_quality: Literal['poor', 'fair', 'good', 'excellent']
+    stress_level: Literal['low', 'moderate', 'high']
+
+
+class MedicalHistory(BaseModel):
+    existing_conditions: List[str] = Field(default_factory=list, max_length=50)
+    allergies: List[str] = Field(default_factory=list, max_length=50)
+    current_medications: List[str] = Field(default_factory=list, max_length=50)
+
+
+class FamilyHistory(BaseModel):
+    conditions: List[str] = Field(default_factory=list)
+
+    @field_validator('conditions')
+    @classmethod
+    def _hereditary(cls, v: List[str]) -> List[str]:
+        for item in v:
+            if item not in HEREDITARY:
+                raise ValueError(f'Unknown hereditary condition: {item}')
+        return v
+
+
+class Location(BaseModel):
+    state: Literal['Karnataka'] = 'Karnataka'
+    city: str  # cross-validated against KARNATAKA_CITIES at the endpoint
+
+
+class AnalyzeRiskRequest(BaseModel):
+    basic: BasicProfile
+    lifestyle: Lifestyle
+    medical: MedicalHistory
+    family_history: FamilyHistory
+    location: Location
+
+
+class ContributingFactor(BaseModel):
+    dimension: str
+    component: Literal['cardiovascular', 'metabolic', 'wellness', 'hereditary']
+    delta: int
+
+
+class RiskEngineResult(BaseModel):
+    risk_score: int
+    risk_level: Literal['Low', 'Moderate', 'High']
+    wellness_score: int
+    components: Dict[str, int]
+    contributing_factors: List[ContributingFactor]
+
+
+class GeminiInsights(BaseModel):
+    preventive_health_insights: str
+    lifestyle_recommendations: str
+    diet_suggestions: str
+    exercise_guidance: str
+    mental_wellness_improvements: str
+    long_term_wellness_awareness: str
+    habit_optimization_recommendations: str
+
+
+class AnalyzeRiskResponse(BaseModel):
+    report_id: int
+    wellness_score: int
+    risk_score: int
+    risk_level: Literal['Low', 'Moderate', 'High']
+    contributing_factors: List[ContributingFactor]
+    insights: Optional[GeminiInsights]
+    ai_insights_unavailable: bool
+    created_at: datetime
+
+
+class SaveReportRequest(BaseModel):
+    wellness_score: int
+    risk_score: int
+    risk_level: Literal['Low', 'Moderate', 'High']
+    contributing_factors: List[ContributingFactor]
+    insights: Optional[GeminiInsights] = None
+    ai_insights_unavailable: bool
+    payload_snapshot: Dict[str, Any]
+
 # ==================== AUTH HELPERS ====================
 
 def create_token(username: str) -> str:
@@ -333,6 +559,515 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+# ==================== PUBLIC ENDPOINTS ====================
+
+# Pre-build the response body once at import time so every call to
+# GET /api/cities returns a byte-identical JSON payload (Requirement 10.4).
+_CITIES_RESPONSE_BODY: Dict[str, List[str]] = {
+    "Karnataka": list(KARNATAKA_CITIES_SORTED)
+}
+
+
+@api_router.get("/cities")
+async def get_cities() -> JSONResponse:
+    """Return the canonical Karnataka cities list.
+
+    Public endpoint (no auth required, Requirement 10.3). Cached for one hour
+    via ``Cache-Control: public, max-age=3600`` (Requirement 10.2).
+    """
+    return JSONResponse(
+        content=_CITIES_RESPONSE_BODY,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+# ==================== ONBOARDING / ANALYZE-RISK ENDPOINT ====================
+
+# 256 KB hard limit on the request body (Requirement 9.1, design § "POST
+# /api/analyze-risk"). Enforced before any parsing or validation to keep the
+# 413 response immediate and to make it impossible for an oversized payload to
+# reach the Risk Engine, Gemini, or the database.
+_ANALYZE_RISK_MAX_BODY_BYTES: int = 256 * 1024
+
+
+def _format_validation_errors(exc: ValidationError) -> List[Dict[str, Any]]:
+    """Render a Pydantic ``ValidationError`` as the canonical 400 detail list.
+
+    Each entry has the shape ``{"loc": [...], "msg": str, "type": str}`` with
+    ``loc`` prefixed by ``"body"`` so the frontend can route the error to the
+    onboarding step that owns the field (design § "400 body shape").
+    """
+    detail: List[Dict[str, Any]] = []
+    for err in exc.errors():
+        loc = ["body", *[str(p) for p in err.get("loc", ())]]
+        detail.append(
+            {
+                "loc": loc,
+                "msg": err.get("msg", ""),
+                "type": err.get("type", "value_error"),
+            }
+        )
+    return detail
+
+
+@api_router.post("/analyze-risk", response_model=AnalyzeRiskResponse)
+async def analyze_risk(
+    request: Request,
+    username: str = Depends(verify_token),
+) -> AnalyzeRiskResponse:
+    """Run the deterministic Risk Engine + Gemini insights for an onboarding
+    submission and persist the result.
+
+    Implements Requirements 9.1–9.9 and 12.1–12.4. Latency budget (design):
+
+      * 401 (auth)        — ≤1 s, no DB writes (Requirement 9.2).
+      * 400 (validation)  — ≤1 s, no DB writes (Requirement 9.6).
+      * 413 (body too big)— immediate, no DB writes (Requirement 9.1).
+      * 500 (Risk Engine) — ≤6 s, no Gemini call, no DB writes (Requirement 9.9).
+      * 200 happy path    — ≤20 s end-to-end (Requirement 9.5).
+    """
+    # ---- 256 KB body-size guard (Requirement 9.1). -------------------------
+    # Trust the Content-Length header when present so we can reject oversized
+    # uploads without buffering them. When the header is absent (chunked
+    # transfer encoding), fall back to reading the body and checking its size
+    # before handing the bytes to Pydantic.
+    raw_body: Optional[bytes] = None
+    content_length_header = request.headers.get("content-length")
+    if content_length_header is not None:
+        try:
+            declared_length = int(content_length_header)
+        except ValueError:
+            declared_length = -1
+        if declared_length > _ANALYZE_RISK_MAX_BODY_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="Request body exceeds 256 KB limit",
+            )
+    raw_body = await request.body()
+    if len(raw_body) > _ANALYZE_RISK_MAX_BODY_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Request body exceeds 256 KB limit",
+        )
+
+    # ---- Pydantic validation (Requirement 9.6). ----------------------------
+    try:
+        if not raw_body:
+            raise ValidationError.from_exception_data(
+                "AnalyzeRiskRequest",
+                [{"type": "missing", "loc": (), "input": None}],
+            )
+        body_obj = json.loads(raw_body)
+    except json.JSONDecodeError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=[{"loc": ["body"], "msg": f"Invalid JSON: {e.msg}", "type": "value_error.json"}],
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=_format_validation_errors(exc))
+
+    try:
+        payload = AnalyzeRiskRequest.model_validate(body_obj)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=_format_validation_errors(exc))
+
+    # ---- City cross-validation against the canonical Karnataka set. --------
+    # Requirement 9.6 requires the field-level error shape; keep the path
+    # rooted at ``["body", "location", "city"]`` so the Result Screen can
+    # route the user back to step 6.
+    if payload.location.city not in KARNATAKA_CITIES_SORTED:
+        raise HTTPException(
+            status_code=400,
+            detail=[
+                {
+                    "loc": ["body", "location", "city"],
+                    "msg": "city must be one of the supported Karnataka cities",
+                    "type": "value_error.city",
+                }
+            ],
+        )
+
+    # ---- Resolve authenticated user_id (Requirement 9.2 + 12.1). -----------
+    user_row = await fetch_one("SELECT id FROM users WHERE username=%s", (username,))
+    if not user_row:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = int(user_row["id"])
+
+    payload_dict = payload.model_dump()
+
+    # ---- Risk Engine (Requirements 9.3, 9.9). ------------------------------
+    # 5-second deadline runs the pure function in a worker thread so the event
+    # loop stays free. Any timeout / unhandled exception returns 500 *before*
+    # Gemini or the database is touched.
+    try:
+        risk = await asyncio.wait_for(
+            asyncio.to_thread(compute_risk, payload_dict),
+            timeout=5,
+        )
+    except asyncio.TimeoutError:
+        logger.error("analyze-risk: Risk Engine exceeded 5 s deadline")
+        raise HTTPException(status_code=500, detail="Risk analysis failed")
+    except Exception:
+        logger.exception("analyze-risk: Risk Engine raised")
+        raise HTTPException(status_code=500, detail="Risk analysis failed")
+
+    # ---- Gemini insights (Requirements 9.4, 9.5, 9.7, 9.8). ----------------
+    # The Gemini service module's own outer cap is 20 s; the analyze endpoint
+    # further constrains the wait to 15 s. Any failure path -> insights=None
+    # and ai_insights_unavailable=True; persistence still happens.
+    insights_dict: Optional[Dict[str, str]] = None
+    try:
+        insights_dict = await asyncio.wait_for(
+            gemini_insights.generate(
+                payload_dict,
+                risk,
+                gemini_call=gemini_generate,
+            ),
+            timeout=15,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("analyze-risk: Gemini exceeded 15 s deadline")
+        insights_dict = None
+    except Exception:
+        logger.exception("analyze-risk: gemini_insights.generate raised")
+        insights_dict = None
+
+    ai_insights_unavailable = insights_dict is None
+
+    # ---- Persistence (Requirements 9.5, 12.1, 12.2, 12.3, 12.4). -----------
+    # All four mutations (users upsert, health_profiles upsert, family_history
+    # replace, risk_reports insert) execute under a single transaction so a
+    # mid-flight failure cannot leave a half-written report.
+    if db_pool is None:
+        raise RuntimeError("Database pool is not initialized")
+
+    now = to_dt(datetime.utcnow())
+    contributing_factors_json = json.dumps(risk["contributing_factors"])
+    ai_analysis_json = json.dumps(insights_dict) if insights_dict is not None else None
+    payload_snapshot_json = json.dumps(payload_dict, default=str)
+
+    report_id: int = 0
+    async with db_pool.acquire() as conn:
+        # Switch off autocommit for the duration of the transaction; restore
+        # afterwards so the connection is returned to the pool in its default
+        # autocommit=True state (matches `ensure_database_pool`).
+        await conn.autocommit(False)
+        try:
+            async with conn.cursor() as cur:
+                # users: upsert name, preferred_state, preferred_city.
+                await cur.execute(
+                    "UPDATE users SET name=%s, preferred_state=%s, preferred_city=%s WHERE id=%s",
+                    (
+                        payload.basic.full_name,
+                        payload.location.state,
+                        payload.location.city,
+                        user_id,
+                    ),
+                )
+
+                # health_profiles: upsert all extended onboarding columns.
+                # The legacy CREATE TABLE declares several NOT NULL columns
+                # (sleep_pattern, sleep_hours, hydration_level, diet_type)
+                # that the redesign does not collect. Reuse the redesign
+                # values where they semantically overlap (sleep_quality →
+                # sleep_pattern, water_intake → hydration_level) and supply
+                # safe defaults for the rest so an INSERT against a fresh
+                # row never violates the NOT NULL constraints.
+                await cur.execute(
+                    "SELECT id, created_at FROM health_profiles WHERE user_id=%s LIMIT 1",
+                    (user_id,),
+                )
+                hp_existing = await cur.fetchone()
+                if hp_existing:
+                    await cur.execute(
+                        """
+                        UPDATE health_profiles SET
+                            age=%s,
+                            gender=%s,
+                            height=%s,
+                            weight=%s,
+                            smoking=%s,
+                            alcohol=%s,
+                            exercise_frequency=%s,
+                            sleep_quality=%s,
+                            stress_level=%s,
+                            water_intake=%s,
+                            sleep_pattern=%s,
+                            hydration_level=%s,
+                            updated_at=%s
+                        WHERE user_id=%s
+                        """,
+                        (
+                            payload.basic.age,
+                            payload.basic.gender,
+                            payload.basic.height_cm,
+                            payload.basic.weight_kg,
+                            payload.lifestyle.smoking,
+                            payload.lifestyle.alcohol,
+                            payload.lifestyle.exercise_frequency,
+                            payload.lifestyle.sleep_quality,
+                            payload.lifestyle.stress_level,
+                            payload.lifestyle.water_intake,
+                            payload.lifestyle.sleep_quality,
+                            payload.lifestyle.water_intake,
+                            now,
+                            user_id,
+                        ),
+                    )
+                else:
+                    await cur.execute(
+                        """
+                        INSERT INTO health_profiles (
+                            user_id,
+                            sleep_pattern, sleep_hours, hydration_level,
+                            stress_level, exercise_frequency, diet_type,
+                            age, gender, height, weight,
+                            smoking, alcohol, sleep_quality, water_intake,
+                            created_at, updated_at
+                        ) VALUES (
+                            %s,
+                            %s, %s, %s,
+                            %s, %s, %s,
+                            %s, %s, %s, %s,
+                            %s, %s, %s, %s,
+                            %s, %s
+                        )
+                        """,
+                        (
+                            user_id,
+                            payload.lifestyle.sleep_quality,  # sleep_pattern
+                            7,                                 # sleep_hours default
+                            payload.lifestyle.water_intake,    # hydration_level
+                            payload.lifestyle.stress_level,
+                            payload.lifestyle.exercise_frequency,
+                            "balanced",                        # diet_type default
+                            payload.basic.age,
+                            payload.basic.gender,
+                            payload.basic.height_cm,
+                            payload.basic.weight_kg,
+                            payload.lifestyle.smoking,
+                            payload.lifestyle.alcohol,
+                            payload.lifestyle.sleep_quality,
+                            payload.lifestyle.water_intake,
+                            now,
+                            now,
+                        ),
+                    )
+
+                # family_history: replace the user's full set inside the
+                # transaction (design § "Persist"). The unique key
+                # (user_id, condition) makes the DELETE+INSERT pattern safe.
+                await cur.execute(
+                    "DELETE FROM family_history WHERE user_id=%s",
+                    (user_id,),
+                )
+                for cond in payload.family_history.conditions:
+                    await cur.execute(
+                        "INSERT INTO family_history (user_id, `condition`, created_at) VALUES (%s, %s, %s)",
+                        (user_id, cond, now),
+                    )
+
+                # risk_reports: one row per call, with payload_snapshot,
+                # contributing_factors JSON, ai_analysis JSON or NULL, and
+                # ai_insights_unavailable flag (Requirement 12.4).
+                await cur.execute(
+                    """
+                    INSERT INTO risk_reports (
+                        user_id,
+                        risk_score, risk_level, wellness_score,
+                        contributing_factors, ai_analysis,
+                        ai_insights_unavailable,
+                        payload_snapshot, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        user_id,
+                        int(risk["risk_score"]),
+                        risk["risk_level"],
+                        int(risk["wellness_score"]),
+                        contributing_factors_json,
+                        ai_analysis_json,
+                        1 if ai_insights_unavailable else 0,
+                        payload_snapshot_json,
+                        now,
+                    ),
+                )
+                report_id = int(cur.lastrowid or 0)
+
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            logger.exception("analyze-risk: persistence failed")
+            raise HTTPException(status_code=500, detail="Failed to persist report")
+        finally:
+            # Restore the pool's default autocommit mode for the next caller.
+            try:
+                await conn.autocommit(True)
+            except Exception:
+                pass
+
+    return AnalyzeRiskResponse(
+        report_id=report_id,
+        wellness_score=int(risk["wellness_score"]),
+        risk_score=int(risk["risk_score"]),
+        risk_level=risk["risk_level"],
+        contributing_factors=[
+            ContributingFactor(**f) for f in risk["contributing_factors"]
+        ],
+        insights=GeminiInsights(**insights_dict) if insights_dict else None,
+        ai_insights_unavailable=ai_insights_unavailable,
+        created_at=now,
+    )
+
+# ==================== ONBOARDING / SAVE-REPORT + REPORTS ENDPOINTS ====================
+
+
+def _parse_json_column(value: Any) -> Any:
+    """Decode a value coming from a MySQL ``JSON`` column.
+
+    aiomysql may return JSON columns as ``str`` or ``bytes`` depending on
+    server / driver version; on some configurations it returns a pre-decoded
+    Python object. Handle every shape and return ``None`` (or ``[]`` when the
+    caller requests it) on a malformed payload so a single corrupt row never
+    blocks the whole history listing.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = value.decode("utf-8")
+        except Exception:
+            return None
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            return None
+    return value
+
+
+@api_router.post("/save-report", status_code=201)
+async def save_report(
+    payload: SaveReportRequest,
+    username: str = Depends(verify_token),
+) -> Dict[str, Any]:
+    """Persist a Risk_Report row scoped to the JWT subject.
+
+    Implements Requirements 11.1, 11.3, 11.5, 11.7. On any database error the
+    handler returns ``500 {"detail": "Failed to persist report"}`` and does
+    not surface a partial 201 response.
+    """
+    user_row = await fetch_one("SELECT id FROM users WHERE username=%s", (username,))
+    if not user_row:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = int(user_row["id"])
+
+    if db_pool is None:
+        logger.error("save-report: database pool not initialized")
+        raise HTTPException(status_code=500, detail="Failed to persist report")
+
+    now = to_dt(datetime.utcnow())
+    contributing_factors_json = json.dumps(
+        [f.model_dump() for f in payload.contributing_factors]
+    )
+    ai_analysis_json = (
+        json.dumps(payload.insights.model_dump()) if payload.insights is not None else None
+    )
+    payload_snapshot_json = json.dumps(payload.payload_snapshot, default=str)
+
+    try:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO risk_reports (
+                        user_id,
+                        risk_score, risk_level, wellness_score,
+                        contributing_factors, ai_analysis,
+                        ai_insights_unavailable,
+                        payload_snapshot, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        user_id,
+                        int(payload.risk_score),
+                        payload.risk_level,
+                        int(payload.wellness_score),
+                        contributing_factors_json,
+                        ai_analysis_json,
+                        1 if payload.ai_insights_unavailable else 0,
+                        payload_snapshot_json,
+                        now,
+                    ),
+                )
+                report_id = int(cur.lastrowid or 0)
+            await conn.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("save-report: persistence failed")
+        raise HTTPException(status_code=500, detail="Failed to persist report")
+
+    return {"id": report_id, "created_at": now}
+
+
+@api_router.get("/reports", response_model=List[AnalyzeRiskResponse])
+async def get_reports(username: str = Depends(verify_token)) -> List[AnalyzeRiskResponse]:
+    """Return the authenticated user's Risk_Report rows, newest first.
+
+    Implements Requirements 11.2, 11.3, 11.4, 11.6. Rows are scoped strictly
+    by ``user_id`` so a JWT for user A can never observe user B's history.
+    Users with no persisted reports receive an empty array (Requirement 11.4).
+    """
+    user_row = await fetch_one("SELECT id FROM users WHERE username=%s", (username,))
+    if not user_row:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = int(user_row["id"])
+
+    rows = await fetch_all(
+        """
+        SELECT id, risk_score, risk_level, wellness_score,
+               contributing_factors, ai_analysis,
+               ai_insights_unavailable, created_at
+        FROM risk_reports
+        WHERE user_id=%s
+        ORDER BY created_at DESC, id DESC
+        """,
+        (user_id,),
+    )
+
+    out: List[AnalyzeRiskResponse] = []
+    for row in rows:
+        cf_decoded = _parse_json_column(row.get("contributing_factors"))
+        cf_list = cf_decoded if isinstance(cf_decoded, list) else []
+        ai_decoded = _parse_json_column(row.get("ai_analysis"))
+        ai_dict = ai_decoded if isinstance(ai_decoded, dict) else None
+
+        try:
+            contributing = [ContributingFactor(**f) for f in cf_list]
+        except (TypeError, ValidationError):
+            contributing = []
+
+        try:
+            insights = GeminiInsights(**ai_dict) if ai_dict is not None else None
+        except (TypeError, ValidationError):
+            insights = None
+
+        out.append(
+            AnalyzeRiskResponse(
+                report_id=int(row["id"]),
+                wellness_score=int(row["wellness_score"]),
+                risk_score=int(row["risk_score"]),
+                risk_level=row["risk_level"],
+                contributing_factors=contributing,
+                insights=insights,
+                ai_insights_unavailable=bool(row["ai_insights_unavailable"]),
+                created_at=row["created_at"],
+            )
+        )
+
+    return out
+
 
 # ==================== AUTH ENDPOINTS ====================
 
@@ -363,6 +1098,37 @@ async def login(user: UserLogin):
 
     token = create_token(user.username)
     return TokenResponse(token=token, username=user.username)
+
+
+class UserMeResponse(BaseModel):
+    username: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+    preferred_city: Optional[str] = None
+    preferred_state: Optional[str] = None
+
+
+@api_router.get("/auth/me", response_model=UserMeResponse)
+async def get_me(username: str = Depends(verify_token)) -> UserMeResponse:
+    """Return the authenticated user's profile metadata.
+
+    Used by features (e.g. the Medical Cost Estimator) that need to auto-fill
+    the user's onboarding city without re-prompting them.
+    """
+    row = await fetch_one(
+        "SELECT username, name, email, preferred_city, preferred_state "
+        "FROM users WHERE username=%s",
+        (username,),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+    return UserMeResponse(
+        username=row["username"],
+        name=row.get("name"),
+        email=row.get("email"),
+        preferred_city=row.get("preferred_city"),
+        preferred_state=row.get("preferred_state"),
+    )
 
 # ==================== HEALTH PROFILE ENDPOINTS ====================
 
@@ -1428,6 +2194,371 @@ async def generate_health_report(
         logger.error(f"Error generating health report: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate health report: {str(e)}")
 
+# ==================== MEDICAL COST ESTIMATOR ENDPOINTS ====================
+
+class CostEstimateRequest(BaseModel):
+    """Inputs for the deterministic medical cost estimator.
+
+    The user's `city` defaults to the value stored on the authenticated user's
+    profile during onboarding (`users.preferred_city`). Callers may override
+    it explicitly, but if both the request body and the profile are empty the
+    endpoint returns a 400 so the UI can prompt for it.
+    """
+
+    condition: str = Field(min_length=1, max_length=200)
+    city: Optional[str] = Field(default=None, max_length=64)
+    severity: Optional[Literal["Mild", "Moderate", "Severe", "mild", "moderate", "severe"]] = None
+    hospital_tier: Optional[Literal["Low", "Medium", "High", "low", "medium", "high"]] = None
+    consultation_type: Optional[Literal[
+        "General", "Specialist", "Follow_up", "Tele",
+        "general", "specialist", "follow_up", "tele",
+    ]] = None
+    save_history: bool = True
+
+
+class CostBand(BaseModel):
+    min: int
+    max: int
+
+
+class CostBreakdown(BaseModel):
+    consultation: Optional[CostBand] = None
+    tests: Optional[CostBand] = None
+    medication: Optional[CostBand] = None
+    procedure: Optional[CostBand] = None
+    hospitalization: Optional[CostBand] = None
+
+
+class MatchedHospital(BaseModel):
+    name: str
+    city: str
+    district: str
+    hospital_type: str
+    specialization: str
+    rating: float
+    cost_level: str
+    relevance_score: float
+
+
+class CostEstimateResponse(BaseModel):
+    id: Optional[int] = None
+    city: str
+    condition: Dict[str, str]
+    tier: str
+    severity: str
+    consultation_type: str
+
+    # Final (possibly AI-refined) total range surfaced to the UI. Always
+    # safe to display because the refinement layer is constrained to the
+    # deterministic envelope below.
+    estimated_total_min: int
+    estimated_total_max: int
+    breakdown: CostBreakdown
+
+    # Per-tier baseline ranges (only populated when tier == "Auto").
+    tier_breakdown: Dict[str, CostBand] = Field(default_factory=dict)
+    present_tiers: List[str] = Field(default_factory=list)
+
+    # Deterministic baseline kept alongside the refined values so the UI
+    # can show the user where the AI moved the estimate.
+    baseline_total_min: int
+    baseline_total_max: int
+    baseline_breakdown: CostBreakdown
+
+    # Hard envelope the refinement layer was constrained to. Surfaced for
+    # transparency / debugging.
+    allowed_range: CostBand
+    allowed_components: Dict[str, CostBand] = Field(default_factory=dict)
+
+    matched_hospitals: List[MatchedHospital]
+    confidence_note: str
+    relevance_summary: str
+
+    # AI-assisted refinement metadata.
+    refinement_applied: bool = False
+    refinement_reasoning: List[str] = Field(default_factory=list)
+    refinement_decline_reason: Optional[str] = None
+
+    created_at: Optional[datetime] = None
+
+
+class CostEstimateHistoryItem(BaseModel):
+    id: int
+    city: str
+    condition_label: str
+    condition_key: str
+    tier: str
+    severity: str
+    consultation_type: str
+    estimated_total_min: int
+    estimated_total_max: int
+    created_at: datetime
+
+
+@api_router.get("/cost-estimate/conditions")
+async def list_cost_conditions() -> Dict[str, Any]:
+    """Return the catalog of supported conditions for the estimator UI.
+
+    Public structure; no auth needed because it is purely static catalog data.
+    """
+    return {
+        "conditions": [
+            {
+                "key": c.key,
+                "label": c.label,
+                "specializations": list(c.specializations),
+            }
+            for c in cost_estimator.CONDITION_CATALOG
+        ],
+        "severities": ["Mild", "Moderate", "Severe"],
+        "hospital_tiers": ["Low", "Medium", "High"],
+        "consultation_types": ["General", "Specialist", "Follow_up", "Tele"],
+    }
+
+
+@api_router.post("/cost-estimate", response_model=CostEstimateResponse)
+async def create_cost_estimate(
+    payload: CostEstimateRequest,
+    username: str = Depends(verify_token),
+) -> CostEstimateResponse:
+    """Generate an AI-assisted contextual healthcare cost estimate.
+
+    Two-layer architecture:
+
+      1. ``cost_estimator`` runs deterministically and produces a baseline
+         total range, per-line breakdown, hard pricing envelope
+         (``allowed_range`` / ``allowed_components``), tier-stratified
+         hospital matches, and a confidence note.
+
+      2. ``cost_refiner`` asks Gemini to refine the estimate so it reflects
+         realistic healthcare workflow complexity for the condition,
+         severity, and tier — strictly inside the envelope from step 1.
+         Any failure (timeout, malformed JSON, out-of-bounds output) falls
+         back to the deterministic baseline transparently.
+
+    The user always sees a valid estimate; AI is a contextual refinement
+    layer, never the source of truth for numeric values.
+    """
+    user = await fetch_one(
+        "SELECT id, preferred_city FROM users WHERE username=%s",
+        (username,),
+    )
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = int(user["id"])
+
+    city = (payload.city or "").strip() or (user.get("preferred_city") or "").strip()
+    if not city:
+        raise HTTPException(
+            status_code=400,
+            detail=[
+                {
+                    "loc": ["body", "city"],
+                    "msg": "city is required (no preferred_city found on profile)",
+                    "type": "value_error.city",
+                }
+            ],
+        )
+
+    # ---- Layer 1: deterministic baseline ---------------------------------
+    try:
+        baseline = await asyncio.to_thread(
+            cost_estimator.estimate,
+            city=city,
+            condition_text=payload.condition,
+            severity=payload.severity,
+            hospital_tier=payload.hospital_tier,
+            consultation_type=payload.consultation_type,
+        )
+    except Exception:
+        logger.exception("cost-estimate: estimator raised")
+        raise HTTPException(status_code=500, detail="Failed to generate estimate")
+
+    # Pull fields needed by the refiner before composing the response.
+    baseline_breakdown: Dict[str, Dict[str, int]] = dict(baseline.get("breakdown") or {})  # type: ignore[arg-type]
+    allowed_components: Dict[str, Dict[str, int]] = dict(baseline.get("allowed_components") or {})  # type: ignore[arg-type]
+    allowed_range: Dict[str, int] = dict(baseline.get("allowed_range") or {  # type: ignore[arg-type]
+        "min": int(baseline["estimated_total_min"]),
+        "max": int(baseline["estimated_total_max"]),
+    })
+
+    # Build a one-line summary of the city's hospital availability so the
+    # refiner can reason about workflow without needing the full list.
+    matched_hospital_summary = _summarize_hospital_pool(baseline.get("matched_hospitals") or [])  # type: ignore[arg-type]
+
+    # Specializations relevant to this condition (used in the prompt).
+    specializations: List[str] = []
+    cond_meta = cost_estimator.resolve_condition(payload.condition)
+    specializations = list(cond_meta.specializations)
+
+    # ---- Layer 2: AI-assisted refinement ---------------------------------
+    refinement = cost_refiner.RefinementResult(
+        final_min=int(baseline["estimated_total_min"]),
+        final_max=int(baseline["estimated_total_max"]),
+        components=baseline_breakdown,
+        reasoning=[],
+        refinement_applied=False,
+        decline_reason="gemini_unavailable" if not GEMINI_API_KEY else None,
+    )
+    if GEMINI_API_KEY:
+        try:
+            refinement = await asyncio.wait_for(
+                cost_refiner.refine(
+                    deterministic={
+                        **baseline,
+                        "specializations": specializations,
+                    },
+                    matched_hospital_summary=matched_hospital_summary,
+                    gemini_call=gemini_generate,
+                ),
+                timeout=cost_refiner.GEMINI_TIMEOUT_SECONDS + 1,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("cost-estimate: refiner outer timeout")
+        except Exception:
+            logger.exception("cost-estimate: refiner raised")
+
+    # Persist (best-effort).
+    estimate_id: Optional[int] = None
+    created_at = to_dt(datetime.utcnow())
+    if payload.save_history:
+        try:
+            snapshot = {
+                **baseline,
+                "refinement_applied": refinement.refinement_applied,
+                "refinement_reasoning": refinement.reasoning,
+                "refinement_decline_reason": refinement.decline_reason,
+                "final_total_min": refinement.final_min,
+                "final_total_max": refinement.final_max,
+                "final_components": refinement.components,
+            }
+            estimate_id = await execute(
+                """
+                INSERT INTO cost_estimates (
+                    user_id, city, condition_label, condition_key,
+                    tier, severity, consultation_type,
+                    estimated_total_min, estimated_total_max,
+                    response_snapshot, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    user_id,
+                    city,
+                    str(baseline["condition"]["label"]),  # type: ignore[index]
+                    str(baseline["condition"]["key"]),  # type: ignore[index]
+                    str(baseline["tier"]),
+                    str(baseline["severity"]),
+                    str(baseline["consultation_type"]),
+                    int(refinement.final_min),
+                    int(refinement.final_max),
+                    json.dumps(snapshot, default=str),
+                    created_at,
+                ),
+            )
+        except Exception:
+            logger.exception("cost-estimate: failed to persist history row")
+            estimate_id = None
+
+    # Compose the response. The "estimated_total" pair surfaces the *final*
+    # range (refined when applied, baseline otherwise) so the UI can stay
+    # the same. Baseline values are exposed as ``baseline_*`` for
+    # transparency.
+    final_breakdown_payload = {
+        line: {"min": int(band["min"]), "max": int(band["max"])}
+        for line, band in (refinement.components or baseline_breakdown).items()
+    }
+
+    return CostEstimateResponse(
+        id=estimate_id,
+        city=city,
+        condition=baseline["condition"],  # type: ignore[arg-type]
+        tier=str(baseline["tier"]),
+        severity=str(baseline["severity"]),
+        consultation_type=str(baseline["consultation_type"]),
+        estimated_total_min=int(refinement.final_min),
+        estimated_total_max=int(refinement.final_max),
+        breakdown=CostBreakdown(**final_breakdown_payload),  # type: ignore[arg-type]
+        tier_breakdown={
+            str(t): CostBand(min=int(band["min"]), max=int(band["max"]))
+            for t, band in (baseline.get("tier_breakdown") or {}).items()  # type: ignore[union-attr]
+        },
+        present_tiers=[str(t) for t in (baseline.get("present_tiers") or [])],  # type: ignore[union-attr]
+        baseline_total_min=int(baseline["estimated_total_min"]),
+        baseline_total_max=int(baseline["estimated_total_max"]),
+        baseline_breakdown=CostBreakdown(**baseline_breakdown),  # type: ignore[arg-type]
+        allowed_range=CostBand(min=int(allowed_range["min"]), max=int(allowed_range["max"])),
+        allowed_components={
+            line: CostBand(min=int(band["min"]), max=int(band["max"]))
+            for line, band in allowed_components.items()
+        },
+        matched_hospitals=[MatchedHospital(**h) for h in baseline["matched_hospitals"]],  # type: ignore[arg-type]
+        confidence_note=str(baseline["confidence_note"]),
+        relevance_summary=str(baseline["relevance_summary"]),
+        refinement_applied=refinement.refinement_applied,
+        refinement_reasoning=list(refinement.reasoning),
+        refinement_decline_reason=refinement.decline_reason,
+        created_at=created_at,
+    )
+
+
+def _summarize_hospital_pool(hospitals: List[Dict[str, Any]]) -> str:
+    """Compact one-line summary used inside the refinement prompt."""
+    if not hospitals:
+        return "no indexed hospitals matching"
+    counts: Dict[str, int] = {"Low": 0, "Medium": 0, "High": 0}
+    for h in hospitals:
+        tier = str(h.get("cost_level", "")).strip()
+        if tier in counts:
+            counts[tier] += 1
+    parts = [f"{c} {t.lower()}-tier" for t, c in counts.items() if c > 0]
+    return f"{len(hospitals)} hospitals ({', '.join(parts)})" if parts else f"{len(hospitals)} hospitals"
+
+
+@api_router.get(
+    "/cost-estimate/history",
+    response_model=List[CostEstimateHistoryItem],
+)
+async def get_cost_estimate_history(
+    limit: int = 20,
+    username: str = Depends(verify_token),
+) -> List[CostEstimateHistoryItem]:
+    """List the authenticated user's saved cost estimates, newest first."""
+    user = await fetch_one("SELECT id FROM users WHERE username=%s", (username,))
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = int(user["id"])
+    capped = max(1, min(int(limit or 20), 100))
+
+    rows = await fetch_all(
+        """
+        SELECT id, city, condition_label, condition_key,
+               tier, severity, consultation_type,
+               estimated_total_min, estimated_total_max, created_at
+        FROM cost_estimates
+        WHERE user_id=%s
+        ORDER BY created_at DESC, id DESC
+        LIMIT %s
+        """,
+        (user_id, capped),
+    )
+
+    return [
+        CostEstimateHistoryItem(
+            id=int(r["id"]),
+            city=r["city"],
+            condition_label=r["condition_label"],
+            condition_key=r["condition_key"],
+            tier=r["tier"],
+            severity=r["severity"],
+            consultation_type=r["consultation_type"],
+            estimated_total_min=int(r["estimated_total_min"]),
+            estimated_total_max=int(r["estimated_total_max"]),
+            created_at=r["created_at"],
+        )
+        for r in rows
+    ]
+
+
 # ==================== HEALTH ENDPOINT ====================
 
 @api_router.get("/health")
@@ -1465,3 +2596,14 @@ async def shutdown_db_client():
     if db_pool is not None:
         db_pool.close()
         await db_pool.wait_closed()
+
+
+# Allow `python server.py` to launch the API on the LAN interface so phones on
+# the same Wi-Fi can reach it. Bind to 0.0.0.0 (all interfaces) instead of the
+# uvicorn default of 127.0.0.1.
+if __name__ == "__main__":
+    import uvicorn
+
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run("server:app", host=host, port=port, reload=False)

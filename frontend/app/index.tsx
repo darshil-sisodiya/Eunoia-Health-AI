@@ -2,62 +2,86 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, ActivityIndicator, StyleSheet, Animated, Easing, Text, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../contexts/AuthContext';
-import { colors } from '../constants/theme';
+import { colors, typography } from '../constants/theme';
+import { loadDraft } from '../utils/onboardingDraft';
 
 export default function Index() {
   const { token, isLoading } = useAuth();
   const router = useRouter();
   const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(8)).current;
   const [animationDone, setAnimationDone] = useState(false);
 
   useEffect(() => {
-    Animated.sequence([
+    Animated.parallel([
       Animated.timing(opacity, {
         toValue: 1,
-        duration: 800,
+        duration: 700,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
-      Animated.timing(opacity, {
+      Animated.timing(translateY, {
         toValue: 0,
-        duration: 600,
-        delay: 500,
-        easing: Easing.in(Easing.cubic),
+        duration: 700,
+        easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
     ]).start(() => {
-      setAnimationDone(true);
+      Animated.timing(opacity, {
+        toValue: 0,
+        duration: 500,
+        delay: 600,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }).start(() => setAnimationDone(true));
     });
   }, []);
 
   useEffect(() => {
-    if (animationDone && !isLoading) {
-      if (token) {
-        router.replace('/(tabs)/home');
-      } else {
-        router.replace('/auth/login');
+    if (!animationDone || isLoading) return;
+
+    let cancelled = false;
+    (async () => {
+      if (!token) {
+        if (!cancelled) router.replace('/auth/login');
+        return;
       }
-    }
-  }, [token, isLoading]);
-  
-  useEffect(() => {
-    if (animationDone && !isLoading) {
-      if (token) {
-        router.replace('/(tabs)/home');
-      } else {
-        router.replace('/auth/login');
+
+      // Authenticated: resume the redesigned onboarding flow if a recent draft
+      // exists, otherwise drop into the main app. The 30-minute TTL is enforced
+      // inside `loadDraft`, which clears stale entries before returning null.
+      let hasDraft = false;
+      try {
+        const stored = await loadDraft();
+        hasDraft = stored != null;
+      } catch {
+        hasDraft = false;
       }
-    }
-  }, [animationDone]);
+
+      if (cancelled) return;
+      if (hasDraft) {
+        router.replace('/onboarding/welcome');
+      } else {
+        router.replace('/(tabs)/home');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [animationDone, isLoading, token]);
 
   return (
     <View style={styles.container}>
-      <Animated.View style={[styles.welcomeContainer, { opacity }]}>        
+      <Animated.View style={[styles.welcomeContainer, { opacity, transform: [{ translateY }] }]}>
         <Image source={require('../assets/images/icon.png')} style={styles.logo} />
-        <Text style={styles.title}>Huro.AI</Text>
+        <Text style={styles.title}>Eunoia</Text>
+        <Text style={styles.tagline}>Personalised insights, calmly delivered.</Text>
       </Animated.View>
 
-      <ActivityIndicator size="large" color={colors.accent} />
+      <View style={styles.loaderContainer}>
+        <ActivityIndicator size="small" color={colors.textTertiary} />
+      </View>
     </View>
   );
 }
@@ -79,15 +103,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   logo: {
-    width: 80,
-    height: 80,
-    marginBottom: 16,
-    borderRadius: 18,
+    width: 72,
+    height: 72,
+    marginBottom: 20,
+    borderRadius: 16,
   },
   title: {
+    ...typography.largeTitle,
     color: colors.textPrimary,
-    fontSize: 26,
-    fontWeight: '700',
-    letterSpacing: -0.3,
+  },
+  titleAccent: {
+    color: colors.accent,
+  },
+  tagline: {
+    ...typography.caption,
+    color: colors.textTertiary,
+    marginTop: 8,
+    letterSpacing: 0.4,
+  },
+  loaderContainer: {
+    position: 'absolute',
+    bottom: 64,
   },
 });

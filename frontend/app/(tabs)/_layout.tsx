@@ -1,40 +1,46 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { View, StyleSheet, Platform } from 'react-native';
-import { BlurView } from 'expo-blur';
-import { colors, shadows } from '../../constants/theme';
+import { View, StyleSheet, Platform, Text } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { colors, shadows, typography } from '../../constants/theme';
 
 export default function TabLayout() {
+  const insets = useSafeAreaInsets();
+  // Keep the bar a consistent visual distance above the system gesture
+  // bar / home indicator on every device. On iOS we pad above the home
+  // indicator; on Android we account for the gesture inset under
+  // edge-to-edge mode and fall back to a sensible default on devices
+  // that report no inset.
+  const bottomOffset =
+    Platform.OS === 'ios'
+      ? Math.max(insets.bottom, 12) + 4
+      : Math.max(insets.bottom, 8) + 8;
+
   return (
     <View style={styles.container}>
       <Tabs
         screenOptions={{
           headerShown: false,
-          tabBarActiveTintColor: colors.accent,
+          tabBarActiveTintColor: colors.textPrimary,
           tabBarInactiveTintColor: colors.textMuted,
+          tabBarShowLabel: false,
+          tabBarHideOnKeyboard: Platform.OS === 'android',
           tabBarStyle: {
             position: 'absolute',
-            left: 20,
-            right: 20,
-            bottom: Platform.OS === 'ios' ? 28 : 16,
+            left: 16,
+            right: 16,
+            bottom: bottomOffset,
             height: 64,
-            paddingBottom: 8,
-            paddingTop: 8,
-            borderRadius: 20,
-            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+            paddingTop: 0,
+            paddingBottom: 0,
+            borderRadius: 18,
+            backgroundColor: 'rgba(255, 255, 255, 0.96)',
             borderTopWidth: 0,
             borderWidth: 1,
-            borderColor: 'rgba(226, 232, 240, 0.8)',
+            borderColor: colors.surfaceBorder,
             ...shadows.lg,
-          },
-          tabBarLabelStyle: {
-            fontSize: 11,
-            fontWeight: '600',
-            marginTop: -2,
-          },
-          tabBarIconStyle: {
-            marginTop: 4,
+            elevation: 12,
           },
         }}
       >
@@ -43,9 +49,7 @@ export default function TabLayout() {
           options={{
             title: 'Home',
             tabBarIcon: ({ color, focused }) => (
-              <View style={focused ? styles.activeIconBg : undefined}>
-                <Ionicons name={focused ? 'home' : 'home-outline'} size={22} color={color} />
-              </View>
+              <TabIcon name={focused ? 'home' : 'home-outline'} label="Home" color={color} focused={focused} />
             ),
           }}
         />
@@ -54,9 +58,7 @@ export default function TabLayout() {
           options={{
             title: 'Analyzer',
             tabBarIcon: ({ color, focused }) => (
-              <View style={focused ? styles.activeIconBg : undefined}>
-                <Ionicons name={focused ? 'document-text' : 'document-text-outline'} size={22} color={color} />
-              </View>
+              <TabIcon name={focused ? 'document-text' : 'document-text-outline'} label="Rx" color={color} focused={focused} />
             ),
           }}
         />
@@ -65,9 +67,7 @@ export default function TabLayout() {
           options={{
             title: 'Chat',
             tabBarIcon: ({ color, focused }) => (
-              <View style={focused ? styles.activeIconBg : undefined}>
-                <Ionicons name={focused ? 'chatbubbles' : 'chatbubbles-outline'} size={22} color={color} />
-              </View>
+              <TabIcon name={focused ? 'sparkles' : 'sparkles-outline'} label="AI" color={color} focused={focused} />
             ),
           }}
         />
@@ -76,9 +76,7 @@ export default function TabLayout() {
           options={{
             title: 'Profile',
             tabBarIcon: ({ color, focused }) => (
-              <View style={focused ? styles.activeIconBg : undefined}>
-                <Ionicons name={focused ? 'person' : 'person-outline'} size={22} color={color} />
-              </View>
+              <TabIcon name={focused ? 'person' : 'person-outline'} label="You" color={color} focused={focused} />
             ),
           }}
         />
@@ -87,15 +85,56 @@ export default function TabLayout() {
   );
 }
 
+interface TabIconProps {
+  name: keyof typeof Ionicons.glyphMap;
+  label: string;
+  color: string;
+  focused: boolean;
+}
+
+const TabIcon: React.FC<TabIconProps> = ({ name, label, color, focused }) => {
+  return (
+    <View style={styles.tabIconWrap}>
+      <View style={focused ? styles.activePill : styles.inactivePill}>
+        <Ionicons name={name} size={focused ? 18 : 20} color={focused ? colors.textInverse : color} />
+        {focused && <Text style={styles.activeLabel}>{label}</Text>}
+      </View>
+    </View>
+  );
+};
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
   },
-  activeIconBg: {
-    backgroundColor: colors.accentLight,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
+  tabIconWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 64,
+  },
+  inactivePill: {
+    height: 40,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 40,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: colors.inkSurface,
+  },
+  activeLabel: {
+    ...typography.caption,
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textInverse,
+    letterSpacing: 0.2,
   },
 });

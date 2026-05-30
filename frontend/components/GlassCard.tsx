@@ -5,16 +5,28 @@ import { colors, spacing, shadows } from '../constants/theme';
 interface CardProps {
   children: React.ReactNode;
   style?: ViewStyle;
-  /** Adds a subtle accent-tinted background */
+  /** Use the inverse (ink) surface for hero / focal blocks */
+  inverse?: boolean;
+  /** Subtle accent-tinted background — use sparingly */
   tinted?: boolean;
+  /** Disable shadow — flat brutalist variant */
+  flat?: boolean;
 }
 
-export const GlassCard: React.FC<CardProps> = ({ children, style, tinted = false }) => {
+export const GlassCard: React.FC<CardProps> = ({
+  children,
+  style,
+  inverse = false,
+  tinted = false,
+  flat = false,
+}) => {
   return (
     <View
       style={[
         styles.card,
+        inverse && styles.inverse,
         tinted && styles.tinted,
+        flat && styles.flat,
         style,
       ]}
     >
@@ -25,15 +37,25 @@ export const GlassCard: React.FC<CardProps> = ({ children, style, tinted = false
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: spacing.cardRadius,
-    padding: spacing.lg,
+    borderRadius: spacing.cardRadiusLg,
+    padding: spacing.xl,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
     ...shadows.md,
   },
+  inverse: {
+    backgroundColor: colors.inkSurface,
+    borderColor: colors.inkBorder,
+  },
   tinted: {
-    backgroundColor: colors.accentLight,
-    borderColor: 'rgba(79, 70, 229, 0.12)',
+    backgroundColor: colors.accentSoft,
+    borderColor: colors.accentSoftBorder,
+  },
+  flat: {
+    shadowColor: 'transparent',
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    elevation: 0,
   },
 });

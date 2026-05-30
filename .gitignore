@@ -1,6 +1,39 @@
-﻿### Root .gitignore — single source of truth ###
+# Root .gitignore - single source of truth
 
-# Node / Expo (frontend)
+# -----------------------------------------------------------------------------
+# Secrets and environment files
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# API keys, service accounts, signing material, and local credentials.
+backend/cool-academy-464906-j0-3ad32381cbfe.json
+backend/*credentials*.json
+backend/*secret*.json
+backend/*service-account*.json
+backend/*key*.json
+frontend/*service-account*.json
+frontend/*secret*.json
+frontend/*key*.json
+frontend/android/app/google-services.json
+frontend/ios/GoogleService-Info.plist
+*.jks
+*.keystore
+*.p8
+*.p12
+*.pem
+
+# -----------------------------------------------------------------------------
+# Node, Expo, Metro, and EAS
+# -----------------------------------------------------------------------------
+node_modules/
 frontend/node_modules/
 frontend/.expo/
 frontend/.expo-shared/
@@ -8,55 +41,75 @@ frontend/.cache/
 frontend/.metro/
 frontend/.metro-cache/
 frontend/metro-cache/
+frontend/.npm/
 frontend/dist/
-frontend/.next/
 frontend/web-build/
 frontend/expo-env.d.ts
-backend/cool-academy-464906-j0-3ad32381cbfe.json:1
-# Python (backend)
+.eas/
+frontend/.eas/
+
+# -----------------------------------------------------------------------------
+# Python backend
+# -----------------------------------------------------------------------------
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+**/.mypy_cache/
+.ruff_cache/
+**/.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.hypothesis/
+*.egg-info/
+.venv/
+venv/
 backend/.venv/
 backend/venv/
-backend/__pycache__/
-backend/.pytest_cache/
-backend/.mypy_cache/
 
-# Environment files (DO NOT COMMIT)
-.env
-.env.*
-!.env.example
-frontend/.env
-frontend/.env.*
-!frontend/.env.example
-backend/.env
-backend/.env.*
-!backend/.env.example
+# Runtime data and local databases.
+backend/uploads/
+backend/tmp/
+*.db
+*.sqlite
+*.sqlite3
 
-# Credential files (DO NOT COMMIT)
-backend/cool-academy-464906-j0-3ad32381cbfe.json
-backend/*credentials*.json
-backend/*secret*.json
-backend/*service-account*.json
-backend/*key*.json
-frontend/android/app/google-services.json
-frontend/ios/GoogleService-Info.plist
-*.jks
-*.keystore
-
-# OS / editor junk
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-*.log
-
-# Build artefacts (generic)
-dist/
-build/
-
-# Native mobile build artefacts
+# -----------------------------------------------------------------------------
+# Native mobile build outputs
+# -----------------------------------------------------------------------------
 frontend/android/.gradle/
 frontend/android/local.properties
 frontend/android/**/.cxx/
 frontend/android/**/build/
+frontend/ios/Pods/
+frontend/ios/build/
+frontend/ios/DerivedData/
 *.apk
 *.aab
+*.ipa
+
+# -----------------------------------------------------------------------------
+# Generic build outputs, logs, OS files, and editor state
+# -----------------------------------------------------------------------------
+dist/
+build/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local planning/tool metadata.
+.kiro/

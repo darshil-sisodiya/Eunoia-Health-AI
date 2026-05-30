@@ -11,7 +11,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../../contexts/AuthContext';
 import { useRouter } from 'expo-router';
 import axios from 'axios';
@@ -29,18 +28,17 @@ interface HealthProfile {
   health_persona?: string;
 }
 
-const HEALTH_ICONS: Record<string, { icon: string; gradient: [string, string] }> = {
-  sleep_pattern: { icon: 'moon', gradient: ['#818CF8', '#6366F1'] },
-  sleep_hours: { icon: 'time', gradient: ['#60A5FA', '#3B82F6'] },
-  hydration_level: { icon: 'water', gradient: ['#22D3EE', '#06B6D4'] },
-  stress_level: { icon: 'pulse', gradient: ['#FBBF24', '#F59E0B'] },
-  exercise_frequency: { icon: 'fitness', gradient: ['#34D399', '#10B981'] },
-  diet_type: { icon: 'restaurant', gradient: ['#A78BFA', '#8B5CF6'] },
+const HEALTH_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
+  sleep_pattern: 'moon-outline',
+  sleep_hours: 'time-outline',
+  hydration_level: 'water-outline',
+  stress_level: 'pulse-outline',
+  exercise_frequency: 'fitness-outline',
+  diet_type: 'restaurant-outline',
 };
 
 export default function Profile() {
-  const { username, logout } = useAuth();
-  const { token } = useAuth();
+  const { username, logout, token } = useAuth();
   const router = useRouter();
   const [profile, setProfile] = useState<HealthProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -71,12 +69,11 @@ export default function Profile() {
       const canOpen = await Linking.canOpenURL(pdfUrl);
       if (canOpen) {
         await Linking.openURL(pdfUrl);
-        Alert.alert('Success', 'Opening your health report...');
       } else {
         Alert.alert(
           'Report Ready',
           'Your health report is ready. Please copy this URL and open it in your browser:\n\n' + pdfUrl,
-          [{ text: 'OK', onPress: () => console.log('PDF URL:', pdfUrl) }],
+          [{ text: 'OK' }],
         );
       }
     } catch (error: any) {
@@ -88,10 +85,10 @@ export default function Profile() {
   };
 
   const handleLogout = () => {
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
+    Alert.alert('Sign out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Logout',
+        text: 'Sign out',
         style: 'destructive',
         onPress: async () => {
           await logout();
@@ -102,7 +99,7 @@ export default function Profile() {
   };
 
   const handleUpdateProfile = () => {
-    router.push('/onboarding/questions');
+    router.push('/onboarding/welcome');
   };
 
   const formatLabel = (key: string, value: string | number): string => {
@@ -117,7 +114,7 @@ export default function Profile() {
   if (isLoading) {
     return (
       <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={colors.accent} />
+        <ActivityIndicator size="small" color={colors.textTertiary} />
       </View>
     );
   }
@@ -125,57 +122,70 @@ export default function Profile() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Header Card */}
-        <LinearGradient colors={['#4F46E5', '#6366F1', '#818CF8']} style={styles.headerCard} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
-          <View style={styles.avatarContainer}>
+        {/* ── INK HERO HEADER ─────────────────────────────── */}
+        <View style={styles.headerCard}>
+          <View style={styles.heroAccentGlow} pointerEvents="none" />
+
+          <View style={styles.headerTopRow}>
+            <Text style={styles.headerEyebrow}>EUNOIA · MEMBER</Text>
+            <TouchableOpacity onPress={handleUpdateProfile} style={styles.editTopBtn} activeOpacity={0.85}>
+              <Ionicons name="pencil-outline" size={14} color={colors.textInverse} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.identityRow}>
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>{(username || 'U').charAt(0).toUpperCase()}</Text>
             </View>
-            <TouchableOpacity style={styles.editAvatarBtn} onPress={handleUpdateProfile}>
-              <Ionicons name="pencil" size={14} color={colors.accent} />
-            </TouchableOpacity>
+            <View style={styles.identityText}>
+              <Text style={styles.username}>{username}</Text>
+              <View style={styles.memberBadge}>
+                <View style={styles.memberDot} />
+                <Text style={styles.memberText}>Verified member</Text>
+              </View>
+            </View>
           </View>
-          <Text style={styles.username}>{username}</Text>
-          <View style={styles.memberBadge}>
-            <Ionicons name="shield-checkmark" size={14} color="#10B981" />
-            <Text style={styles.memberText}>Health Member</Text>
-          </View>
-        </LinearGradient>
+        </View>
 
-        {/* Health persona */}
+        {/* ── PERSONA ──────────────────────────────────────── */}
         {profile?.health_persona && (
           <View style={styles.personaCard}>
-            <LinearGradient colors={['#FEF3C7', '#FDE68A']} style={styles.personaIconBg}>
-              <Ionicons name="sparkles" size={20} color="#D97706" />
-            </LinearGradient>
+            <View style={styles.personaHeader}>
+              <View style={styles.personaIconBg}>
+                <Ionicons name="sparkles" size={14} color={colors.accent} />
+              </View>
+              <Text style={styles.personaEyebrow}>Health persona</Text>
+            </View>
             <View style={styles.personaContent}>
-              <Text style={styles.personaTitle}>Your Health Persona</Text>
               <MarkdownText content={profile.health_persona} variant="light" />
             </View>
           </View>
         )}
 
-        {/* Health info grid */}
+        {/* ── HEALTH PROFILE GRID ─────────────────────────── */}
         {profile && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Health Profile</Text>
-              <TouchableOpacity onPress={handleUpdateProfile} style={styles.editBtn}>
-                <Ionicons name="create-outline" size={18} color={colors.accent} />
+              <View style={styles.sectionHeaderLeft}>
+                <Text style={styles.sectionEyebrow}>01</Text>
+                <Text style={styles.sectionTitle}>Health Profile</Text>
+              </View>
+              <TouchableOpacity onPress={handleUpdateProfile} style={styles.editBtn} activeOpacity={0.85}>
+                <Ionicons name="create-outline" size={14} color={colors.textPrimary} />
                 <Text style={styles.editBtnText}>Edit</Text>
               </TouchableOpacity>
             </View>
 
             <View style={styles.infoGrid}>
               {(['sleep_pattern', 'sleep_hours', 'hydration_level', 'stress_level', 'exercise_frequency', 'diet_type'] as const).map((key) => {
-                const iconInfo = HEALTH_ICONS[key];
+                const iconName = HEALTH_ICONS[key];
                 const value = profile[key];
                 if (value === undefined) return null;
                 return (
                   <View key={key} style={styles.infoCard}>
-                    <LinearGradient colors={iconInfo.gradient} style={styles.infoIconBg}>
-                      <Ionicons name={iconInfo.icon as any} size={20} color="#fff" />
-                    </LinearGradient>
+                    <View style={styles.infoIconBg}>
+                      <Ionicons name={iconName} size={16} color={colors.textPrimary} />
+                    </View>
                     <Text style={styles.infoLabel}>{formatKeyLabel(key)}</Text>
                     <Text style={styles.infoValue}>{formatLabel(key, value)}</Text>
                   </View>
@@ -185,58 +195,62 @@ export default function Profile() {
           </View>
         )}
 
-        {/* Actions */}
+        {/* ── ACTIONS ───────────────────────────────────── */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Actions</Text>
-
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={handleGenerateReport}
-            disabled={isGeneratingReport}
-            activeOpacity={0.7}
-          >
-            <LinearGradient colors={['#EEF2FF', '#E0E7FF']} style={styles.actionIconWrap}>
-              <Ionicons name="document-text" size={20} color={colors.accent} />
-            </LinearGradient>
-            <View style={styles.actionContent}>
-              <Text style={styles.actionButtonText}>
-                {isGeneratingReport ? 'Generating Report...' : 'Generate Health Report'}
-              </Text>
-              <Text style={styles.actionSubtext}>Download your comprehensive health summary</Text>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionHeaderLeft}>
+              <Text style={styles.sectionEyebrow}>02</Text>
+              <Text style={styles.sectionTitle}>Actions</Text>
             </View>
-            {isGeneratingReport ? (
-              <ActivityIndicator size="small" color={colors.accent} />
-            ) : (
-              <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-            )}
-          </TouchableOpacity>
+          </View>
 
-          <TouchableOpacity style={styles.actionButton} onPress={handleUpdateProfile} activeOpacity={0.7}>
-            <LinearGradient colors={['#ECFDF5', '#D1FAE5']} style={styles.actionIconWrap}>
-              <Ionicons name="refresh" size={20} color="#10B981" />
-            </LinearGradient>
-            <View style={styles.actionContent}>
-              <Text style={styles.actionButtonText}>Update Health Profile</Text>
-              <Text style={styles.actionSubtext}>Retake the health questionnaire</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-          </TouchableOpacity>
+          <View style={styles.actionsList}>
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={handleGenerateReport}
+              disabled={isGeneratingReport}
+              activeOpacity={0.85}
+            >
+              <View style={styles.actionIconWrap}>
+                <Ionicons name="document-text-outline" size={18} color={colors.textPrimary} />
+              </View>
+              <View style={styles.actionContent}>
+                <Text style={styles.actionButtonText}>
+                  {isGeneratingReport ? 'Generating report…' : 'Generate health report'}
+                </Text>
+                <Text style={styles.actionSubtext}>Comprehensive health summary, ready to download</Text>
+              </View>
+              {isGeneratingReport ? (
+                <ActivityIndicator size="small" color={colors.textTertiary} />
+              ) : (
+                <Ionicons name="arrow-forward" size={16} color={colors.textTertiary} />
+              )}
+            </TouchableOpacity>
 
-          <TouchableOpacity style={[styles.actionButton, styles.logoutButton]} onPress={handleLogout} activeOpacity={0.7}>
-            <LinearGradient colors={['#FEE2E2', '#FECACA']} style={styles.actionIconWrap}>
-              <Ionicons name="log-out" size={20} color="#DC2626" />
-            </LinearGradient>
-            <View style={styles.actionContent}>
-              <Text style={[styles.actionButtonText, { color: '#DC2626' }]}>Logout</Text>
-              <Text style={styles.actionSubtext}>Sign out of your account</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+            <View style={styles.actionDivider} />
+
+            <TouchableOpacity style={styles.actionButton} onPress={handleUpdateProfile} activeOpacity={0.85}>
+              <View style={styles.actionIconWrap}>
+                <Ionicons name="refresh-outline" size={18} color={colors.textPrimary} />
+              </View>
+              <View style={styles.actionContent}>
+                <Text style={styles.actionButtonText}>Update health profile</Text>
+                <Text style={styles.actionSubtext}>Retake the health questionnaire</Text>
+              </View>
+              <Ionicons name="arrow-forward" size={16} color={colors.textTertiary} />
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.85}>
+            <Ionicons name="log-out-outline" size={16} color={colors.error} />
+            <Text style={styles.logoutText}>Sign out</Text>
           </TouchableOpacity>
         </View>
 
-        {/* App Info */}
+        {/* App info */}
         <View style={styles.appInfo}>
-          <Text style={styles.appVersion}>Health App v1.0.0</Text>
+          <View style={styles.appInfoDot} />
+          <Text style={styles.appVersion}>EUNOIA v1.0.0</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -255,131 +269,178 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   content: {
-    paddingBottom: 120,
+    paddingBottom: 140,
   },
 
-  // Header Card
+  // ─── Hero ────────────────────────────────────────────────
   headerCard: {
-    alignItems: 'center',
-    paddingTop: spacing.xxl,
-    paddingBottom: spacing.xxxl,
+    backgroundColor: colors.inkSurface,
+    paddingTop: spacing.lg,
+    paddingBottom: 40,
     paddingHorizontal: spacing.screenPadding,
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
-  },
-  avatarContainer: {
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    overflow: 'hidden',
     position: 'relative',
-    marginBottom: spacing.lg,
   },
-  avatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 32,
-    backgroundColor: 'rgba(255,255,255,0.25)',
+  heroAccentGlow: {
+    position: 'absolute',
+    bottom: -100,
+    left: -60,
+    width: 240,
+    height: 240,
+    borderRadius: 120,
+    backgroundColor: colors.accent,
+    opacity: 0.16,
+  },
+  headerTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.xxl,
+  },
+  headerEyebrow: {
+    ...typography.overline,
+    color: colors.textInverseSubtle,
+  },
+  editTopBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: colors.inkBorderStrong,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: 'rgba(255,255,255,0.4)',
+  },
+  identityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.lg,
+  },
+  avatar: {
+    width: 72,
+    height: 72,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: colors.inkBorderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   avatarText: {
     ...typography.display,
-    fontSize: 40,
-    color: '#fff',
+    fontSize: 30,
+    color: colors.textInverse,
   },
-  editAvatarBtn: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadows.md,
+  identityText: {
+    flex: 1,
   },
   username: {
     ...typography.largeTitle,
-    fontSize: 24,
-    color: '#fff',
+    color: colors.textInverse,
   },
   memberBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginTop: spacing.sm,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: spacing.chipRadius,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: colors.inkBorderStrong,
+  },
+  memberDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: colors.success,
   },
   memberText: {
-    ...typography.caption,
+    ...typography.captionSmall,
     fontWeight: '600',
-    color: '#fff',
+    color: colors.textInverse,
   },
 
-  // Persona Card
+  // ─── Persona ─────────────────────────────────────────────
   personaCard: {
-    flexDirection: 'row',
     backgroundColor: colors.surface,
     marginHorizontal: spacing.screenPadding,
     marginTop: -20,
-    borderRadius: 20,
-    padding: spacing.lg,
-    gap: spacing.md,
+    borderRadius: spacing.cardRadiusXl,
+    padding: spacing.xl,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
-    ...shadows.md,
+    ...shadows.lg,
+  },
+  personaHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
   },
   personaIconBg: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: colors.accentMuted,
+    borderWidth: 1,
+    borderColor: colors.accentSoftBorder,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  personaContent: {
-    flex: 1,
-  },
-  personaTitle: {
-    ...typography.headline,
+  personaEyebrow: {
+    ...typography.overline,
     color: colors.textPrimary,
-    marginBottom: 6,
   },
+  personaContent: {},
 
-  // Section
+  // ─── Sections ────────────────────────────────────────────
   section: {
     paddingHorizontal: spacing.screenPadding,
-    marginTop: spacing.xxl,
+    marginTop: 40,
   },
   sectionHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
     marginBottom: spacing.lg,
+  },
+  sectionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: spacing.md,
+  },
+  sectionEyebrow: {
+    ...typography.overline,
+    color: colors.textMuted,
+    fontVariant: ['tabular-nums'],
   },
   sectionTitle: {
     ...typography.title,
-    fontSize: 20,
     color: colors.textPrimary,
   },
   editBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 12,
+    gap: 6,
+    paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 10,
-    backgroundColor: colors.accentLight,
+    borderRadius: spacing.chipRadius,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
   },
   editBtnText: {
     ...typography.caption,
     fontWeight: '600',
-    color: colors.accent,
+    color: colors.textPrimary,
   },
 
-  // Info Grid
+  // ─── Info grid ───────────────────────────────────────────
   infoGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -388,55 +449,60 @@ const styles = StyleSheet.create({
   infoCard: {
     width: '48%',
     backgroundColor: colors.surface,
-    borderRadius: 20,
+    borderRadius: spacing.cardRadiusLg,
     padding: spacing.lg,
-    alignItems: 'center',
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
-    ...shadows.sm,
   },
   infoIconBg: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    backgroundColor: colors.backgroundTertiary,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
   },
   infoLabel: {
-    ...typography.captionSmall,
+    ...typography.overline,
+    fontSize: 10,
     color: colors.textMuted,
-    marginTop: 4,
-    textAlign: 'center',
+    marginBottom: 4,
   },
   infoValue: {
     ...typography.bodyMedium,
     fontWeight: '700',
     color: colors.textPrimary,
-    marginTop: 4,
-    textAlign: 'center',
   },
 
-  // Action Buttons
+  // ─── Actions ─────────────────────────────────────────────
+  actionsList: {
+    backgroundColor: colors.surface,
+    borderRadius: spacing.cardRadiusLg,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    overflow: 'hidden',
+  },
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: 20,
     padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    marginBottom: spacing.md,
     gap: spacing.md,
-    ...shadows.sm,
   },
-  logoutButton: {
-    marginTop: spacing.md,
+  actionDivider: {
+    height: 1,
+    backgroundColor: colors.divider,
+    marginHorizontal: spacing.lg,
   },
   actionIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: colors.backgroundTertiary,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -449,18 +515,46 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
   actionSubtext: {
-    ...typography.captionSmall,
-    color: colors.textMuted,
+    ...typography.caption,
+    color: colors.textTertiary,
     marginTop: 2,
   },
-
-  // App Info
-  appInfo: {
+  logoutButton: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: spacing.xxl,
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: spacing.lg,
+    marginTop: spacing.lg,
+    borderRadius: spacing.cardRadiusLg,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    backgroundColor: colors.surface,
+  },
+  logoutText: {
+    ...typography.bodyMedium,
+    fontWeight: '600',
+    color: colors.error,
+  },
+
+  // ─── App info ────────────────────────────────────────────
+  appInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: spacing.xxxl,
+    marginTop: spacing.lg,
+  },
+  appInfoDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: colors.accent,
   },
   appVersion: {
-    ...typography.captionSmall,
+    ...typography.overline,
+    fontSize: 10,
     color: colors.textMuted,
   },
 });

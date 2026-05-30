@@ -1,6 +1,7 @@
 import React from 'react';
 import Markdown, { MarkdownProps } from 'react-native-markdown-display';
 import { Platform } from 'react-native';
+import { colors } from '../constants/theme';
 
 type MarkdownVariant = 'light' | 'dark';
 
@@ -8,36 +9,40 @@ const baseStyles: MarkdownProps['style'] = {
   body: {
     fontSize: 15,
     lineHeight: 22,
-    color: '#0F172A',
+    letterSpacing: -0.1,
+    color: colors.textPrimary,
   },
   strong: {
     fontWeight: '700',
-    color: '#0F172A',
+    color: colors.textPrimary,
   },
   em: {
     fontStyle: 'italic',
-    color: '#334155',
+    color: colors.textSecondary,
   },
   paragraph: {
     marginBottom: 8,
   },
   heading1: {
     fontSize: 22,
-    fontWeight: '700',
+    fontWeight: '800',
+    letterSpacing: -0.6,
     marginBottom: 12,
-    color: '#0F172A',
+    color: colors.textPrimary,
   },
   heading2: {
     fontSize: 18,
     fontWeight: '700',
+    letterSpacing: -0.4,
     marginBottom: 10,
-    color: '#0F172A',
+    color: colors.textPrimary,
   },
   heading3: {
     fontSize: 16,
     fontWeight: '600',
+    letterSpacing: -0.3,
     marginBottom: 8,
-    color: '#1E293B',
+    color: colors.textPrimary,
   },
   bullet_list: {
     marginVertical: 8,
@@ -50,83 +55,92 @@ const baseStyles: MarkdownProps['style'] = {
     flexDirection: 'row',
   },
   bullet_list_icon: {
-    color: '#4F46E5',
+    color: colors.textTertiary,
   },
   ordered_list_icon: {
-    color: '#4F46E5',
+    color: colors.textTertiary,
   },
   code_inline: {
-    backgroundColor: '#F1F5F9',
-    color: '#4338CA',
+    backgroundColor: colors.backgroundTertiary,
+    color: colors.textPrimary,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   code_block: {
-    backgroundColor: '#F8FAFC',
+    backgroundColor: colors.backgroundSecondary,
     padding: 12,
-    borderRadius: 8,
+    borderRadius: 10,
     marginVertical: 8,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: colors.surfaceBorder,
   },
   fence: {
-    backgroundColor: '#F8FAFC',
+    backgroundColor: colors.backgroundSecondary,
     padding: 12,
-    borderRadius: 8,
+    borderRadius: 10,
     marginVertical: 8,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: colors.surfaceBorder,
   },
   link: {
-    color: '#4F46E5',
+    color: colors.accent,
+    fontWeight: '600',
+  },
+  hr: {
+    backgroundColor: colors.divider,
+    height: 1,
+    marginVertical: 12,
   },
 };
 
 const variants: Record<MarkdownVariant, MarkdownProps['style']> = {
-  light: {
-    // Light variant = dark text on light bg (default, nothing to override)
-  },
+  light: {},
   dark: {
-    // Dark variant = light text on dark bg (used inside user-bubble or dark surfaces)
     body: {
-      color: '#F8FAFC',
+      color: colors.textInverse,
     },
     strong: {
-      color: '#FFFFFF',
+      color: colors.textInverse,
     },
     em: {
-      color: '#CBD5E1',
+      color: colors.textInverseMuted,
     },
     heading1: {
-      color: '#FFFFFF',
+      color: colors.textInverse,
     },
     heading2: {
-      color: '#F1F5F9',
+      color: colors.textInverse,
     },
     heading3: {
-      color: '#E2E8F0',
+      color: colors.textInverseMuted,
     },
     code_inline: {
-      backgroundColor: 'rgba(255, 255, 255, 0.12)',
-      color: '#C7D2FE',
+      backgroundColor: 'rgba(255, 255, 255, 0.10)',
+      color: colors.textInverse,
     },
     code_block: {
-      backgroundColor: 'rgba(15, 23, 42, 0.4)',
-      borderWidth: 0,
+      backgroundColor: 'rgba(255, 255, 255, 0.06)',
+      borderColor: 'rgba(255, 255, 255, 0.10)',
     },
     fence: {
-      backgroundColor: 'rgba(15, 23, 42, 0.4)',
-      borderWidth: 0,
+      backgroundColor: 'rgba(255, 255, 255, 0.06)',
+      borderColor: 'rgba(255, 255, 255, 0.10)',
     },
     bullet_list_icon: {
-      color: '#818CF8',
+      color: colors.textInverseMuted,
     },
     ordered_list_icon: {
-      color: '#818CF8',
+      color: colors.textInverseMuted,
+    },
+    link: {
+      color: '#A5B4FC',
+    },
+    hr: {
+      backgroundColor: 'rgba(255, 255, 255, 0.12)',
     },
   },
 };

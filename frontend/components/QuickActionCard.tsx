@@ -7,8 +7,8 @@ interface QuickActionCardProps {
   icon: keyof typeof Ionicons.glyphMap;
   title: string;
   subtitle: string;
-  /** Accent color for the icon badge – now a single color, not a gradient */
-  colors: [string, string];
+  /** Legacy prop — colors are derived from the monochrome system */
+  colors?: [string, string];
   onPress: () => void;
 }
 
@@ -16,22 +16,21 @@ export const QuickActionCard: React.FC<QuickActionCardProps> = ({
   icon,
   title,
   subtitle,
-  colors: [iconColor],
   onPress,
 }) => {
   return (
     <TouchableOpacity
       onPress={onPress}
-      activeOpacity={0.7}
+      activeOpacity={0.85}
       style={styles.container}
     >
-      <View style={[styles.iconContainer, { backgroundColor: `${iconColor}14` }]}>
-        <Ionicons name={icon} size={22} color={iconColor} />
+      <View style={styles.iconContainer}>
+        <Ionicons name={icon} size={20} color={colors.textPrimary} />
       </View>
       <Text style={styles.title}>{title}</Text>
       <Text style={styles.subtitle} numberOfLines={2}>{subtitle}</Text>
       <View style={styles.arrow}>
-        <Ionicons name="arrow-forward" size={16} color={colors.textMuted} />
+        <Ionicons name="arrow-forward" size={14} color={colors.textTertiary} />
       </View>
     </TouchableOpacity>
   );
@@ -39,22 +38,25 @@ export const QuickActionCard: React.FC<QuickActionCardProps> = ({
 
 const styles = StyleSheet.create({
   container: {
-    borderRadius: spacing.cardRadius,
+    borderRadius: spacing.cardRadiusLg,
     padding: spacing.xl,
-    minHeight: 140,
+    minHeight: 144,
     justifyContent: 'space-between',
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.surfaceBorder,
-    ...shadows.md,
+    ...shadows.sm,
   },
   iconContainer: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
+    width: 40,
+    height: 40,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: spacing.md,
+    backgroundColor: colors.backgroundTertiary,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
   },
   title: {
     ...typography.headline,
@@ -63,12 +65,20 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     ...typography.caption,
-    color: colors.textSecondary,
+    color: colors.textTertiary,
     lineHeight: 17,
   },
   arrow: {
     position: 'absolute',
     bottom: spacing.lg,
     right: spacing.lg,
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.backgroundSecondary,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
   },
 });
