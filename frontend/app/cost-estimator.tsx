@@ -25,6 +25,7 @@ import {
   getMe,
   type CostEstimateResponse,
   type MatchedHospital,
+  type RecommendedDoctor,
   type UserMe,
 } from '../utils/costEstimatorApi';
 
@@ -66,6 +67,7 @@ function tierTone(level: string) {
   const v = (level || '').toLowerCase();
   if (v === 'high') return { bg: colors.accentMuted, fg: colors.accent, border: colors.accentSoftBorder };
   if (v === 'low') return { bg: colors.successSoft, fg: colors.success, border: colors.successSoft };
+  // "medium" and Bangalore's "mid" share the neutral tone.
   return { bg: colors.backgroundTertiary, fg: colors.textPrimary, border: colors.surfaceBorder };
 }
 
@@ -541,12 +543,20 @@ function EstimateResult({
           <View style={styles.heroAccentGlow} pointerEvents="none" />
           <View style={styles.totalCardTopRow}>
             <Text style={styles.totalEyebrow}>RANGE FOR {estimate.condition.label.toUpperCase()}</Text>
-            {estimate.refinement_applied && (
-              <View style={styles.refinedBadge}>
-                <View style={styles.refinedBadgeDot} />
-                <Text style={styles.refinedBadgeText}>AI-ASSISTED</Text>
-              </View>
-            )}
+            <View style={styles.totalBadgeRow}>
+              {estimate.bangalore_mode && (
+                <View style={styles.localBadge}>
+                  <Ionicons name="location" size={9} color={colors.textInverse} />
+                  <Text style={styles.localBadgeText}>BENGALURU</Text>
+                </View>
+              )}
+              {estimate.refinement_applied && (
+                <View style={styles.refinedBadge}>
+                  <View style={styles.refinedBadgeDot} />
+                  <Text style={styles.refinedBadgeText}>AI-ASSISTED</Text>
+                </View>
+              )}
+            </View>
           </View>
           <View style={styles.totalRow}>
             <Text style={styles.totalValue}>{formatINR(estimate.estimated_total_min)}</Text>
@@ -565,6 +575,14 @@ function EstimateResult({
             <View style={styles.metaPill}>
               <Text style={styles.metaPillText}>{capitalize(estimate.severity)}</Text>
             </View>
+            {estimate.bangalore_mode && estimate.mapped_specialization ? (
+              <>
+                <View style={styles.metaDot} />
+                <View style={styles.metaPill}>
+                  <Text style={styles.metaPillText}>{estimate.mapped_specialization}</Text>
+                </View>
+              </>
+            ) : null}
           </View>
           {estimate.refinement_applied && (
             <View style={styles.baselineCompareRow}>
@@ -671,7 +689,9 @@ function EstimateResult({
                 return String(n).padStart(2, '0');
               })()}
             </Text>
-            <Text style={styles.sectionTitle}>Relevant hospitals</Text>
+            <Text style={styles.sectionTitle}>
+              {estimate.bangalore_mode ? 'Hospitals & doctors' : 'Relevant hospitals'}
+            </Text>
           </View>
           <Text style={styles.sectionMeta}>{estimate.matched_hospitals.length}</Text>
         </View>
@@ -685,7 +705,11 @@ function EstimateResult({
         ) : (
           <View style={styles.hospitalsList}>
             {estimate.matched_hospitals.map((h) => (
-              <HospitalRow key={h.name} hospital={h} />
+              <HospitalRow
+                key={h.name}
+                hospital={h}
+                bangalore={!!estimate.bangalore_mode}
+              />
             ))}
           </View>
         )}
@@ -704,25 +728,32 @@ function EstimateResult({
   );
 }
 
-function HospitalRow({ hospital }: { hospital: MatchedHospital }) {
-  const tone = tierTone(hospital.cost_level);
+function HospitalRow({
+  hospital,
+  bangalore,
+}: {
+  hospital: MatchedHospital;
+  bangalore: boolean;
+}) {
+  const tierLabel = hospital.tier || hospital.cost_level;
+  const tone = tierTone(tierLabel);
   const stars = useMemo(() => hospital.rating.toFixed(1), [hospital.rating]);
   const relevancePct = Math.round(hospital.relevance_score * 100);
+
+  const isBangalore = bangalore;
+  const doctors = hospital.doctors ?? [];
+  const hasFee =
+    hospital.consultation_fee_min != null && hospital.consultation_fee_max != null;
+  const hasCostRange =
+    hospital.estimated_cost_min != null && hospital.estimated_cost_max != null;
+
   return (
-    <View style={styles.hospitalRow}>
+    <View style={isBangalore ? styles.hospitalCard : styles.hospitalRow}>
       <View style={styles.hospitalLeft}>
-        <Text style={styles.hospitalName} numberOfLines={2}>
-          {hospital.name}
-        </Text>
-        <Text style={styles.hospitalSubtle} numberOfLines={1}>
-          {hospital.specialization} · {hospital.hospital_type}
-        </Text>
-        <View style={styles.hospitalMetaRow}>
-          <View style={styles.hospitalMetaItem}>
-            <Ionicons name="star" size={10} color={colors.textPrimary} />
-            <Text style={styles.hospitalMetaText}>{stars}</Text>
-          </View>
-          <View style={styles.hospitalMetaDivider} />
+        <View style={styles.hospitalTitleRow}>
+          <Text style={styles.hospitalName} numberOfLines={2}>
+            {hospital.name}
+          </Text>
           <View
             style={[
               styles.hospitalTierPill,
@@ -730,13 +761,99 @@ function HospitalRow({ hospital }: { hospital: MatchedHospital }) {
             ]}
           >
             <Text style={[styles.hospitalTierText, { color: tone.fg }]}>
-              {hospital.cost_level.toUpperCase()}
+              {tierLabel.toUpperCase()}
             </Text>
           </View>
+        </View>
+
+        <Text style={styles.hospitalSubtle} numberOfLines={1}>
+          {hospital.specialization} · {hospital.hospital_type}
+          {isBangalore && hospital.area ? ` · ${hospital.area}` : ''}
+        </Text>
+
+        <View style={styles.hospitalMetaRow}>
+          <View style={styles.hospitalMetaItem}>
+            <Ionicons name="star" size={10} color={colors.textPrimary} />
+            <Text style={styles.hospitalMetaText}>{stars}</Text>
+          </View>
+          {isBangalore && hospital.accreditation ? (
+            <>
+              <View style={styles.hospitalMetaDivider} />
+              <Text style={styles.hospitalRelevance}>{hospital.accreditation}</Text>
+            </>
+          ) : null}
           <View style={styles.hospitalMetaDivider} />
           <Text style={styles.hospitalRelevance}>{relevancePct}% match</Text>
         </View>
+
+        {/* Bangalore-only: consultation fee + estimated cost range */}
+        {isBangalore && (hasFee || hasCostRange) ? (
+          <View style={styles.hospitalStatsRow}>
+            {hasFee ? (
+              <View style={styles.hospitalStat}>
+                <Text style={styles.hospitalStatLabel}>CONSULTATION</Text>
+                <Text style={styles.hospitalStatValue}>
+                  {hospital.consultation_fee_min === hospital.consultation_fee_max
+                    ? formatINR(hospital.consultation_fee_min as number)
+                    : `${formatINR(hospital.consultation_fee_min as number)} – ${formatINR(
+                        hospital.consultation_fee_max as number,
+                      )}`}
+                </Text>
+              </View>
+            ) : null}
+            {hasCostRange ? (
+              <View style={styles.hospitalStat}>
+                <Text style={styles.hospitalStatLabel}>EST. TREATMENT</Text>
+                <Text style={styles.hospitalStatValue}>
+                  {`${formatINR(hospital.estimated_cost_min as number)} – ${formatINR(
+                    hospital.estimated_cost_max as number,
+                  )}`}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
+        {/* Bangalore-only: recommended doctors */}
+        {isBangalore && doctors.length > 0 ? (
+          <View style={styles.doctorList}>
+            <Text style={styles.doctorListLabel}>Recommended doctors</Text>
+            {doctors.map((doc, idx) => (
+              <DoctorRow key={`${doc.name}-${idx}`} doctor={doc} />
+            ))}
+          </View>
+        ) : null}
       </View>
+    </View>
+  );
+}
+
+function DoctorRow({ doctor }: { doctor: RecommendedDoctor }) {
+  return (
+    <View style={styles.doctorRow}>
+      <View style={styles.doctorAvatar}>
+        <Ionicons name="person" size={12} color={colors.textPrimary} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.doctorName} numberOfLines={1}>
+          {doctor.name}
+        </Text>
+        <Text style={styles.doctorMeta} numberOfLines={1}>
+          {doctor.specialization}
+          {doctor.qualification ? ` · ${doctor.qualification}` : ''}
+          {doctor.experience_years ? ` · ${doctor.experience_years} yrs` : ''}
+        </Text>
+        {doctor.availability || doctor.timing ? (
+          <Text style={styles.doctorAvailability} numberOfLines={1}>
+            {[doctor.availability, doctor.timing].filter(Boolean).join(' · ')}
+          </Text>
+        ) : null}
+      </View>
+      {doctor.consultation_fee != null ? (
+        <View style={styles.doctorFeePill}>
+          <Text style={styles.doctorFeeText}>{formatINR(doctor.consultation_fee)}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -1274,6 +1391,22 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: spacing.md,
   },
+  // Bangalore-rich variant: a fuller card with doctors + fee stats.
+  hospitalCard: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.divider,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+  },
+  hospitalTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
   hospitalLeft: {
     flex: 1,
   },
@@ -1281,6 +1414,7 @@ const styles = StyleSheet.create({
     ...typography.bodyMedium,
     fontWeight: '700',
     color: colors.textPrimary,
+    flex: 1,
   },
   hospitalSubtle: {
     ...typography.caption,
@@ -1340,6 +1474,120 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textTertiary,
     marginTop: spacing.md,
+  },
+
+  // ── Bangalore-specific hospital enrichment ──────────────────
+  hospitalStatsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  hospitalStat: {
+    flexGrow: 1,
+    flexBasis: '46%',
+    backgroundColor: colors.backgroundTertiary,
+    borderRadius: spacing.cardRadius,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  hospitalStatLabel: {
+    ...typography.overline,
+    fontSize: 9,
+    color: colors.textMuted,
+    marginBottom: 2,
+  },
+  hospitalStatValue: {
+    ...typography.caption,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    fontVariant: ['tabular-nums'],
+  },
+  doctorList: {
+    marginTop: spacing.md,
+    gap: spacing.sm,
+  },
+  doctorListLabel: {
+    ...typography.overline,
+    fontSize: 10,
+    color: colors.textMuted,
+    marginBottom: 2,
+  },
+  doctorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.background,
+    borderRadius: spacing.cardRadius,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  doctorAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.backgroundTertiary,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  doctorName: {
+    ...typography.caption,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  doctorMeta: {
+    ...typography.captionSmall,
+    color: colors.textTertiary,
+    marginTop: 1,
+  },
+  doctorAvailability: {
+    ...typography.captionSmall,
+    color: colors.textMuted,
+    marginTop: 1,
+  },
+  doctorFeePill: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: spacing.chipRadius,
+    backgroundColor: colors.accentMuted,
+    borderWidth: 1,
+    borderColor: colors.accentSoftBorder,
+  },
+  doctorFeeText: {
+    ...typography.captionSmall,
+    fontWeight: '700',
+    color: colors.accent,
+    fontVariant: ['tabular-nums'],
+  },
+
+  // ── Total card: badge row + Bengaluru localized badge ───────
+  totalBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  localBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: spacing.chipRadius,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    borderColor: colors.inkBorderStrong,
+  },
+  localBadgeText: {
+    ...typography.overline,
+    fontSize: 9,
+    color: colors.textInverse,
   },
 
   // ── Skeletons ───────────────────────────────────────────────

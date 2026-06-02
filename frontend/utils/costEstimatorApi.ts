@@ -24,6 +24,16 @@ export interface CostBreakdown {
   hospitalization?: CostBand | null;
 }
 
+export interface RecommendedDoctor {
+  name: string;
+  specialization: string;
+  qualification?: string | null;
+  experience_years?: number | null;
+  consultation_fee?: number | null;
+  availability?: string | null;
+  timing?: string | null;
+}
+
 export interface MatchedHospital {
   name: string;
   city: string;
@@ -31,8 +41,20 @@ export interface MatchedHospital {
   hospital_type: string;
   specialization: string;
   rating: number;
-  cost_level: string; // "Low" | "Medium" | "High"
+  cost_level: string; // "Low" | "Medium" | "Mid" | "High"
   relevance_score: number;
+
+  // Bangalore-only enrichment (sourced from blr.xlsx). Null/empty for every
+  // other Karnataka city so the existing layout renders unchanged.
+  area?: string | null;
+  tier?: string | null; // "Low" | "Mid" | "High"
+  accreditation?: string | null;
+  total_beds?: number | null;
+  consultation_fee_min?: number | null;
+  consultation_fee_max?: number | null;
+  estimated_cost_min?: number | null;
+  estimated_cost_max?: number | null;
+  doctors?: RecommendedDoctor[];
 }
 
 export interface CostEstimateRequest {
@@ -73,6 +95,13 @@ export interface CostEstimateResponse {
   matched_hospitals: MatchedHospital[];
   confidence_note: string;
   relevance_summary: string;
+
+  // True when the estimate came from the Bangalore-specific (blr.xlsx)
+  // pipeline, which attaches doctor recommendations + consultation fees.
+  bangalore_mode?: boolean;
+
+  // Specialization the symptom text was routed to (Bangalore pipeline only).
+  mapped_specialization?: string | null;
 
   // AI-assisted refinement metadata
   refinement_applied: boolean;

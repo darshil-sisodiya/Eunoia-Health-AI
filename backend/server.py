@@ -42,6 +42,12 @@ import gemini_insights
 import cost_estimator
 import cost_refiner
 
+# Bangalore-specific estimator backed by ``blr.xlsx``. Provides a richer,
+# fee-driven cost + doctor-recommendation pipeline used only when the selected
+# city is Bengaluru/Bangalore. Falls back to the generic estimator when the
+# dataset is unavailable (``bangalore_estimator.AVAILABLE`` is False).
+import bangalore_estimator
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -2229,6 +2235,22 @@ class CostBreakdown(BaseModel):
     hospitalization: Optional[CostBand] = None
 
 
+class RecommendedDoctor(BaseModel):
+    """A doctor surfaced for a Bangalore hospital recommendation.
+
+    Only populated for Bengaluru results (sourced from ``blr.xlsx``); other
+    Karnataka cities never attach doctors.
+    """
+
+    name: str
+    specialization: str
+    qualification: Optional[str] = None
+    experience_years: Optional[int] = None
+    consultation_fee: Optional[int] = None
+    availability: Optional[str] = None
+    timing: Optional[str] = None
+
+
 class MatchedHospital(BaseModel):
     name: str
     city: str
@@ -2238,6 +2260,19 @@ class MatchedHospital(BaseModel):
     rating: float
     cost_level: str
     relevance_score: float
+
+    # ── Bangalore-only enrichment (populated from blr.xlsx) ──────────────
+    # These remain ``None`` for every other Karnataka city so the existing
+    # deterministic pipeline is unaffected.
+    area: Optional[str] = None
+    tier: Optional[str] = None  # "Low" | "Mid" | "High"
+    accreditation: Optional[str] = None
+    total_beds: Optional[int] = None
+    consultation_fee_min: Optional[int] = None
+    consultation_fee_max: Optional[int] = None
+    estimated_cost_min: Optional[int] = None
+    estimated_cost_max: Optional[int] = None
+    doctors: List[RecommendedDoctor] = Field(default_factory=list)
 
 
 class CostEstimateResponse(BaseModel):
@@ -2273,6 +2308,15 @@ class CostEstimateResponse(BaseModel):
     matched_hospitals: List[MatchedHospital]
     confidence_note: str
     relevance_summary: str
+
+    # True when this estimate came from the Bangalore-specific (blr.xlsx)
+    # pipeline, which attaches doctor recommendations, consultation fees, and
+    # fee-driven tier classification to each hospital.
+    bangalore_mode: bool = False
+
+    # The specialization the symptom text was routed to (Bangalore pipeline
+    # only). Surfaced so the UI can show "Matched to: Cardiology" etc.
+    mapped_specialization: Optional[str] = None
 
     # AI-assisted refinement metadata.
     refinement_applied: bool = False
@@ -2361,9 +2405,14 @@ async def create_cost_estimate(
         )
 
     # ---- Layer 1: deterministic baseline ---------------------------------
+    # Conditional routing: Bengaluru/Bangalore uses the richer, fee-driven
+    # blr.xlsx pipeline; every other Karnataka city keeps the existing
+    # deterministic estimator unchanged.
+    use_bangalore = bangalore_estimator.is_bangalore(city) and bangalore_estimator.AVAILABLE
+    estimator_fn = bangalore_estimator.estimate if use_bangalore else cost_estimator.estimate
     try:
         baseline = await asyncio.to_thread(
-            cost_estimator.estimate,
+            estimator_fn,
             city=city,
             condition_text=payload.condition,
             severity=payload.severity,
@@ -2494,6 +2543,12 @@ async def create_cost_estimate(
         matched_hospitals=[MatchedHospital(**h) for h in baseline["matched_hospitals"]],  # type: ignore[arg-type]
         confidence_note=str(baseline["confidence_note"]),
         relevance_summary=str(baseline["relevance_summary"]),
+        bangalore_mode=bool(baseline.get("bangalore_mode", False)),
+        mapped_specialization=(
+            str(baseline["mapped_specialization"])
+            if baseline.get("mapped_specialization")
+            else None
+        ),
         refinement_applied=refinement.refinement_applied,
         refinement_reasoning=list(refinement.reasoning),
         refinement_decline_reason=refinement.decline_reason,
@@ -2505,7 +2560,7 @@ def _summarize_hospital_pool(hospitals: List[Dict[str, Any]]) -> str:
     """Compact one-line summary used inside the refinement prompt."""
     if not hospitals:
         return "no indexed hospitals matching"
-    counts: Dict[str, int] = {"Low": 0, "Medium": 0, "High": 0}
+    counts: Dict[str, int] = {"Low": 0, "Medium": 0, "Mid": 0, "High": 0}
     for h in hospitals:
         tier = str(h.get("cost_level", "")).strip()
         if tier in counts:

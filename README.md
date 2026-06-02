@@ -9,6 +9,7 @@ This repository is a monorepo:
 |-- backend/                      FastAPI API, MySQL schema, AI services
 |-- frontend/                     Expo Router mobile app
 |-- karnataka_hospitals_200.csv   Hospital data used by the cost estimator
+|-- blr.xlsx                      Bangalore hospital + doctor directory (richer dataset)
 |-- deploy.ps1                    Interactive deployment helper
 |-- .gitignore                    Root ignore rules for the full project
 ```
@@ -28,6 +29,8 @@ This repository is a monorepo:
 | Meditation tracker | Provides a timer, logs sessions, and summarizes weekly meditation minutes. |
 | PDF report | Builds a doctor-friendly health report with profile, prescriptions, AI summary, and disclaimer. |
 | Cost estimator | Estimates medical cost ranges from calibrated Karnataka hospital data, then optionally refines inside safe bounds with Gemini. |
+| Bangalore estimator | For Bengaluru, uses the richer `blr.xlsx` directory to drive fee-based hospital tiers and recommend specialist doctors per condition. |
+| Symptom mapper | Maps free-text complaints to the correct medical specialization with a 150+-keyword-per-specialization dictionary and a strict no-surgical-fallback rule. |
 | Reminders API | Backend reminder create/list/toggle routes are available for a future UI surface. |
 
 ## Architecture
@@ -95,6 +98,9 @@ backend/
 |-- gemini_insights.py     Preventive insights prompt/parser/safety layer
 |-- cost_estimator.py      Deterministic healthcare cost estimator
 |-- cost_refiner.py        Gemini cost refinement with hard bounds
+|-- bangalore_estimator.py Bangalore fee-driven estimator + doctor recommendations
+|-- specialization_keywords.py  Keyword dictionary (150+ per specialization)
+|-- specialization_mapper.py    Symptom text to specialization triage mapper
 |-- cities.py              Canonical Karnataka city list
 |-- pdf_generator.py       ReportLab health report builder
 |-- run.ps1                Local PowerShell backend runner
@@ -457,6 +463,64 @@ Gemini refinement:
 - Falls back to the deterministic baseline on timeout, malformed output, transport failure, or out-of-bounds numbers.
 
 Supported categories include general medicine, diabetes, hypertension, asthma/respiratory, dental, ophthalmology, orthopedics, cardiology, neurology, obstetrics and gynaecology, and oncology.
+
+#### Bangalore-Specific Pipeline
+
+Frontend files:
+
+- `frontend/app/cost-estimator.tsx`
+- `frontend/utils/costEstimatorApi.ts`
+
+Backend files:
+
+- `backend/bangalore_estimator.py`
+- `backend/specialization_keywords.py`
+- `backend/specialization_mapper.py`
+- `blr.xlsx`
+
+When the selected city is Bengaluru/Bangalore, the request is routed to a richer
+pipeline backed by `blr.xlsx` (300 hospitals, ~5,000 doctors with real
+consultation fees). Every other Karnataka city keeps the existing deterministic
+estimator unchanged.
+
+The Bangalore pipeline:
+
+- Classifies hospitals into Low/Mid/High tiers dynamically from the
+  distribution of consultation fees blended with hospital category, rather than
+  hardcoded bands.
+- Maps the free-text symptom to a medical specialization, then to the matching
+  `blr.xlsx` department, and recommends relevant doctors (name, specialization,
+  qualification, experience, consultation fee, availability).
+- Anchors the consultation cost line on real per-doctor fees for the chosen
+  tier while reusing the calibrated structural cost model for the remaining
+  lines.
+- Returns per-hospital fee ranges, estimated treatment ranges, and a tier
+  classification badge.
+
+Generalist fallback: complaints that map to a specialization with no dedicated
+department in `blr.xlsx` (General Physician, Internal Medicine, Physiotherapy,
+Nutrition/Dietetics) deliberately fall back to the generic estimator and return
+hospitals only, exactly like every other Karnataka city.
+
+#### Symptom To Specialization Mapper
+
+Files:
+
+- `backend/specialization_keywords.py`
+- `backend/specialization_mapper.py`
+
+The mapper turns a free-text complaint into the single best specialization:
+
+- A keyword dictionary with 150+ entries per specialization, covering symptoms,
+  diseases, layman wording, clinical terms, abbreviations, spelling variants,
+  and synonym phrases, across every department in `blr.xlsx`.
+- Normalization (lowercase, de-accent, abbreviation/synonym expansion,
+  punctuation cleanup), weighted phrase matching, and partial matching for
+  paraphrases.
+- A strict fallback to `General Physician` (or `Internal Medicine` for
+  chronic/systemic wording). It never defaults to a surgical department, which
+  fixes the prior "fever to General Surgery" misrouting. A surgical
+  specialization is only selected on a genuine surgical keyword match.
 
 ### Reminders API
 
