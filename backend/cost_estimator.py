@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -459,6 +460,47 @@ def _condition_by_key(key: str) -> Optional[ConditionProfile]:
     return None
 
 
+_MULTI_SPLIT_RE = re.compile(
+    r"\s*(?:,|;|/|\band\b|\bplus\b|\balong with\b|&)+\s*",
+    re.IGNORECASE,
+)
+_MAX_MULTI_CONDITIONS = 4
+
+
+def _split_condition_phrases(text: str) -> Tuple[str, ...]:
+    """Split free-text symptoms into candidate condition phrases."""
+    if not text:
+        return ()
+    norm = text.strip()
+    if not norm:
+        return ()
+    parts = [p.strip(" .-") for p in _MULTI_SPLIT_RE.split(norm) if p and p.strip(" .-")]
+    # Keep deterministic ordering, de-dupe case-insensitively.
+    seen: set = set()
+    cleaned: List[str] = []
+    for part in parts:
+        key = part.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(part)
+    return tuple(cleaned)
+
+
+def _condition_scores(norm_text: str) -> Dict[ConditionProfile, float]:
+    """Return alias-match scores for every condition profile."""
+    scores: Dict[ConditionProfile, float] = {}
+    if not norm_text:
+        return scores
+    for cond in CONDITION_CATALOG:
+        score = 0.0
+        for alias in sorted(cond.aliases, key=len, reverse=True):
+            if alias in norm_text:
+                score += 1.0 + len(alias) / 30.0
+        scores[cond] = score
+    return scores
+
+
 def resolve_condition(text: str) -> ConditionProfile:
     """Resolve a free-form condition string to a canonical condition profile.
 
@@ -496,6 +538,52 @@ def resolve_condition(text: str) -> ConditionProfile:
             best = cond
 
     return best if (best is not None and best_score > 0) else fallback
+
+
+def resolve_conditions(text: str) -> Tuple[ConditionProfile, ...]:
+    """Resolve a free-form string into one or more condition profiles.
+
+    Returns a deterministic, de-duplicated tuple ordered by match strength.
+    """
+    fallback = _condition_by_key("general")
+    assert fallback is not None
+
+    if not text:
+        return (fallback,)
+    norm = text.strip().lower()
+    if not norm:
+        return (fallback,)
+
+    matched: Dict[str, ConditionProfile] = {}
+
+    for phrase in _split_condition_phrases(text):
+        cond = resolve_condition(phrase)
+        matched.setdefault(cond.key, cond)
+
+    scores = _condition_scores(norm)
+    scored = sorted(
+        ((cond, score) for cond, score in scores.items() if score > 0),
+        key=lambda pair: (-pair[1], pair[0].label),
+    )
+    for cond, _ in scored:
+        matched.setdefault(cond.key, cond)
+
+    if not matched:
+        return (fallback,)
+
+    # Order by full-text score, then by label for determinism.
+    ordered = sorted(
+        matched.values(),
+        key=lambda cond: (
+            -scores.get(cond, 0.0),
+            cond.label,
+        ),
+    )
+
+    if len(ordered) > _MAX_MULTI_CONDITIONS:
+        ordered = ordered[:_MAX_MULTI_CONDITIONS]
+
+    return tuple(ordered)
 
 
 # ---------------------------------------------------------------------------
@@ -577,6 +665,24 @@ def _stratified_pick(
     return picked
 
 
+def _score_hospitals_for_condition(
+    pool: Tuple[Hospital, ...],
+    condition: ConditionProfile,
+) -> List[Tuple[Hospital, float]]:
+    scored: List[Tuple[Hospital, float]] = []
+    for h in pool:
+        rel = _hospital_relevance(h, condition)
+        if rel <= 0:
+            continue
+        scored.append((h, rel))
+
+    if not scored:
+        scored = [(h, 0.40) for h in pool]
+
+    scored.sort(key=lambda pair: (-pair[1], -pair[0].rating, pair[0].name))
+    return scored
+
+
 def match_hospitals(
     *,
     city: str,
@@ -589,17 +695,7 @@ def match_hospitals(
     if not pool:
         return []
 
-    scored: List[Tuple[Hospital, float]] = []
-    for h in pool:
-        rel = _hospital_relevance(h, condition)
-        if rel <= 0:
-            continue
-        scored.append((h, rel))
-
-    if not scored:
-        scored = [(h, 0.40) for h in pool]
-
-    scored.sort(key=lambda pair: (-pair[1], -pair[0].rating, pair[0].name))
+    scored = _score_hospitals_for_condition(pool, condition)
 
     if requested_tier:
         target = _normalize_cost_level(requested_tier)
@@ -609,6 +705,100 @@ def match_hospitals(
         return scored[:limit]
 
     return _stratified_pick(scored, target=limit)
+
+
+def match_hospitals_multi(
+    *,
+    city: str,
+    conditions: Tuple[ConditionProfile, ...],
+    requested_tier: Optional[str],
+    limit: int = 6,
+) -> Tuple[List[Tuple[Hospital, float]], str]:
+    """Return hospitals for multiple conditions with a clear selection strategy."""
+    pool = hospitals_in_city(city)
+    if not pool:
+        return [], "none"
+
+    required_specs = tuple(
+        {
+            spec
+            for cond in conditions
+            for spec in (cond.specializations or ())
+            if spec and spec != "Multi-speciality"
+        }
+    )
+    if not required_specs:
+        primary = conditions[0] if conditions else resolve_condition("")
+        return match_hospitals(
+            city=city,
+            condition=primary,
+            requested_tier=requested_tier,
+            limit=limit,
+        ), "single"
+
+    if requested_tier:
+        target = _normalize_cost_level(requested_tier)
+        tier_pool = tuple(h for h in pool if h.cost_level == target)
+        if tier_pool:
+            pool = tier_pool
+
+    missing_specs = []
+    by_spec: Dict[str, List[Tuple[Hospital, float]]] = {}
+    for spec in required_specs:
+        if not any(h.specialization == spec for h in pool):
+            missing_specs.append(spec)
+            continue
+        pseudo = ConditionProfile(
+            key=f"multi_{spec.lower().replace(' ', '_')}",
+            label=spec,
+            aliases=(),
+            specializations=(spec, "Multi-speciality"),
+        )
+        by_spec[spec] = _score_hospitals_for_condition(pool, pseudo)
+
+    if missing_specs:
+        multi = [h for h in pool if h.specialization == "Multi-speciality"]
+        if multi:
+            pseudo = ConditionProfile(
+                key="multi_speciality",
+                label="Multi-speciality",
+                aliases=(),
+                specializations=("Multi-speciality",),
+            )
+            scored = _score_hospitals_for_condition(tuple(multi), pseudo)
+            return scored[:limit], "multi_speciality"
+        primary = conditions[0] if conditions else resolve_condition("")
+        return match_hospitals(
+            city=city,
+            condition=primary,
+            requested_tier=requested_tier,
+            limit=limit,
+        ), "fallback"
+
+    combined: List[Tuple[Hospital, float]] = []
+    seen: set = set()
+    for spec in required_specs:
+        for hospital, rel in by_spec.get(spec, []):
+            if hospital.name in seen:
+                continue
+            combined.append((hospital, rel))
+            seen.add(hospital.name)
+            break
+
+    if len(combined) < limit:
+        remaining: List[Tuple[Hospital, float]] = []
+        for spec in required_specs:
+            remaining.extend(by_spec.get(spec, [])[1:])
+        remaining.sort(key=lambda pair: (-pair[1], -pair[0].rating, pair[0].name))
+        for hospital, rel in remaining:
+            if hospital.name in seen:
+                continue
+            combined.append((hospital, rel))
+            seen.add(hospital.name)
+            if len(combined) >= limit:
+                break
+
+    return combined[:limit], "multiple_hospitals"
 
 
 # ---------------------------------------------------------------------------
@@ -637,6 +827,63 @@ def _resolve_weights(condition_key: str, severity: str) -> Dict[str, int]:
     return dict(cond.get(severity) or cond["moderate"])
 
 
+def _estimate_condition_breakdown(
+    *,
+    condition_key: str,
+    severity_norm: str,
+    consultation_norm: str,
+    present_tiers: Tuple[str, ...],
+    chosen_tier: Optional[str],
+    auto_tier: bool,
+) -> Tuple[float, float, Dict[str, Dict[str, float]], Dict[str, Dict[str, float]]]:
+    """Return raw totals + breakdowns for one condition (float values)."""
+    if auto_tier:
+        ordered = [t for t in TIER_ORDER if t in present_tiers]
+        if not ordered:
+            ordered = list(TIER_ORDER)
+        low_low, _ = _resolve_total_range(condition_key, ordered[0], severity_norm)
+        _, high_high = _resolve_total_range(condition_key, ordered[-1], severity_norm)
+        total_min = float(low_low)
+        total_max = float(high_high)
+    else:
+        assert chosen_tier is not None
+        lo, hi = _resolve_total_range(condition_key, chosen_tier, severity_norm)
+        total_min = float(lo)
+        total_max = float(hi)
+
+    weights = _resolve_weights(condition_key, severity_norm)
+    weight_total = float(sum(weights.values())) or 1.0
+    raw_breakdown: Dict[str, Dict[str, float]] = {}
+    for line, w in weights.items():
+        share = w / weight_total
+        raw_breakdown[line] = {"min": total_min * share, "max": total_max * share}
+
+    consult_mult = CONSULTATION_MULT.get(consultation_norm, 1.0)
+    if consult_mult != 1.0 and "consultation" in raw_breakdown:
+        c = raw_breakdown["consultation"]
+        c["min"] = c["min"] * consult_mult
+        c["max"] = c["max"] * consult_mult
+
+    sum_min = sum(b["min"] for b in raw_breakdown.values())
+    sum_max = sum(b["max"] for b in raw_breakdown.values())
+
+    tier_breakdown: Dict[str, Dict[str, float]] = {}
+    if auto_tier:
+        consult_share = (weights.get("consultation", 0) / weight_total) if weight_total else 0
+        for tier in present_tiers:
+            t_lo, t_hi = _resolve_total_range(condition_key, tier, severity_norm)
+            if consult_mult != 1.0 and consult_share > 0:
+                scale = (1 - consult_share) + consult_share * consult_mult
+                t_lo_s = float(t_lo) * scale
+                t_hi_s = float(t_hi) * scale
+            else:
+                t_lo_s = float(t_lo)
+                t_hi_s = float(t_hi)
+            tier_breakdown[tier] = {"min": t_lo_s, "max": t_hi_s}
+
+    return sum_min, sum_max, raw_breakdown, tier_breakdown
+
+
 def estimate(
     *,
     city: str,
@@ -651,7 +898,8 @@ def estimate(
     omitted the response uses tier = ``"Auto"`` and the displayed total
     spans every tier present in the user's city.
     """
-    condition = resolve_condition(condition_text)
+    conditions = resolve_conditions(condition_text)
+    primary_condition = conditions[0]
 
     severity_norm = (severity or "moderate").strip().lower()
     if severity_norm not in _SEVERITIES:
@@ -680,84 +928,65 @@ def estimate(
         assert chosen_tier is not None
         present_tiers = (chosen_tier,)
 
-    matches = match_hospitals(
-        city=city,
-        condition=condition,
-        requested_tier=chosen_tier,
-        limit=6,
-    )
-
-    # ---- Total range (the anchor) ----------------------------------------
-    if auto_tier:
-        # Auto: span from the lowest present tier's min to the highest
-        # present tier's max. Both endpoints are themselves hand-calibrated,
-        # so they are individually plausible.
-        ordered = [t for t in TIER_ORDER if t in present_tiers]
-        if not ordered:
-            ordered = list(TIER_ORDER)
-        low_low, _ = _resolve_total_range(condition.key, ordered[0], severity_norm)
-        _, high_high = _resolve_total_range(condition.key, ordered[-1], severity_norm)
-        total_min = float(low_low)
-        total_max = float(high_high)
+    if len(conditions) == 1:
+        matches = match_hospitals(
+            city=city,
+            condition=primary_condition,
+            requested_tier=chosen_tier,
+            limit=6,
+        )
+        match_strategy = "single"
     else:
-        assert chosen_tier is not None
-        lo, hi = _resolve_total_range(condition.key, chosen_tier, severity_norm)
-        total_min = float(lo)
-        total_max = float(hi)
-
-    # ---- Line breakdown via proportional allocation ---------------------
-    weights = _resolve_weights(condition.key, severity_norm)
-    weight_total = float(sum(weights.values())) or 1.0
+        matches, match_strategy = match_hospitals_multi(
+            city=city,
+            conditions=conditions,
+            requested_tier=chosen_tier,
+            limit=6,
+        )
 
     raw_breakdown: Dict[str, Dict[str, float]] = {}
-    for line, w in weights.items():
-        share = w / weight_total
-        raw_breakdown[line] = {
-            "min": total_min * share,
-            "max": total_max * share,
-        }
+    tier_breakdown_raw: Dict[str, Dict[str, float]] = {
+        tier: {"min": 0.0, "max": 0.0} for tier in present_tiers
+    } if auto_tier else {}
 
-    # Apply consultation_type multiplier to the consultation line, then
-    # re-derive the total from the line sum so the output stays internally
-    # consistent.
-    consult_mult = CONSULTATION_MULT.get(consultation_norm, 1.0)
-    if consult_mult != 1.0 and "consultation" in raw_breakdown:
-        c = raw_breakdown["consultation"]
-        c["min"] = c["min"] * consult_mult
-        c["max"] = c["max"] * consult_mult
+    for cond in conditions:
+        _, _, cond_breakdown, cond_tier_breakdown = _estimate_condition_breakdown(
+            condition_key=cond.key,
+            severity_norm=severity_norm,
+            consultation_norm=consultation_norm,
+            present_tiers=present_tiers,
+            chosen_tier=chosen_tier,
+            auto_tier=auto_tier,
+        )
+        for line, band in cond_breakdown.items():
+            acc = raw_breakdown.setdefault(line, {"min": 0.0, "max": 0.0})
+            acc["min"] += band["min"]
+            acc["max"] += band["max"]
+        if auto_tier:
+            for tier, band in cond_tier_breakdown.items():
+                bucket = tier_breakdown_raw.setdefault(tier, {"min": 0.0, "max": 0.0})
+                bucket["min"] += band["min"]
+                bucket["max"] += band["max"]
 
     sum_min = sum(b["min"] for b in raw_breakdown.values())
     sum_max = sum(b["max"] for b in raw_breakdown.values())
-    total_min, total_max = sum_min, sum_max
 
     breakdown_rounded: Dict[str, Dict[str, int]] = {}
     for line, b in raw_breakdown.items():
         rl, rh = _round_band(b["min"], b["max"])
         breakdown_rounded[line] = {"min": rl, "max": rh}
-    rounded_total_min, rounded_total_max = _round_band(total_min, total_max)
+    rounded_total_min, rounded_total_max = _round_band(sum_min, sum_max)
 
     # ---- Per-tier breakdown (Auto only) ---------------------------------
     tier_breakdown: Dict[str, Dict[str, int]] = {}
     if auto_tier:
-        consult_share = (weights.get("consultation", 0) / weight_total) if weight_total else 0
-        for tier in present_tiers:
-            t_lo, t_hi = _resolve_total_range(condition.key, tier, severity_norm)
-            # Scale the per-tier total by the consultation_type multiplier
-            # using the same approach: only the consultation share is
-            # affected.
-            if consult_mult != 1.0 and consult_share > 0:
-                scale = (1 - consult_share) + consult_share * consult_mult
-                t_lo_s = float(t_lo) * scale
-                t_hi_s = float(t_hi) * scale
-            else:
-                t_lo_s = float(t_lo)
-                t_hi_s = float(t_hi)
-            t_rmin, t_rmax = _round_band(t_lo_s, t_hi_s)
+        for tier, band in tier_breakdown_raw.items():
+            t_rmin, t_rmax = _round_band(band["min"], band["max"])
             tier_breakdown[tier] = {"min": t_rmin, "max": t_rmax}
 
     # ---- Allowed envelope (hard constraint for Gemini) ------------------
-    allowed_total_min_raw = max(0.0, total_min * _ENVELOPE_LOW_MULT)
-    allowed_total_max_raw = total_max * _ENVELOPE_HIGH_MULT
+    allowed_total_min_raw = max(0.0, sum_min * _ENVELOPE_LOW_MULT)
+    allowed_total_max_raw = sum_max * _ENVELOPE_HIGH_MULT
     allowed_total_min, allowed_total_max = _round_band(
         allowed_total_min_raw, allowed_total_max_raw
     )
@@ -784,23 +1013,53 @@ def estimate(
         for h, rel in matches
     ]
 
-    confidence_note = _build_confidence_note(
-        city=city,
-        matches=matches,
-        chosen_tier=chosen_tier,
-        present_tiers=present_tiers,
-        condition=condition,
-        auto=auto_tier,
-    )
-    relevance_summary = _build_relevance_summary(
-        city=city,
-        matches=matches,
-        condition=condition,
-    )
+    if len(conditions) == 1:
+        confidence_note = _build_confidence_note(
+            city=city,
+            matches=matches,
+            chosen_tier=chosen_tier,
+            present_tiers=present_tiers,
+            condition=primary_condition,
+            auto=auto_tier,
+        )
+        relevance_summary = _build_relevance_summary(
+            city=city,
+            matches=matches,
+            condition=primary_condition,
+        )
+    else:
+        required_specs = tuple(
+            {
+                spec
+                for cond in conditions
+                for spec in (cond.specializations or ())
+                if spec and spec != "Multi-speciality"
+            }
+        )
+        confidence_note = _build_multi_confidence_note(
+            city=city,
+            matches=matches,
+            chosen_tier=chosen_tier,
+            present_tiers=present_tiers,
+            auto=auto_tier,
+            condition_count=len(conditions),
+            match_strategy=match_strategy,
+        )
+        relevance_summary = _build_multi_relevance_summary(
+            city=city,
+            matches=matches,
+            required_specs=required_specs,
+            match_strategy=match_strategy,
+        )
 
     return {
         "city": city,
-        "condition": {"key": condition.key, "label": condition.label},
+        "condition": (
+            {"key": primary_condition.key, "label": primary_condition.label}
+            if len(conditions) == 1
+            else {"key": "multi", "label": "Multiple conditions"}
+        ),
+        "conditions": [{"key": c.key, "label": c.label} for c in conditions],
         "tier": "Auto" if auto_tier else chosen_tier,
         "severity": severity_norm,
         "consultation_type": consultation_norm,
@@ -820,6 +1079,81 @@ def estimate(
 # ---------------------------------------------------------------------------
 # Narrative helpers
 # ---------------------------------------------------------------------------
+
+
+def _build_multi_confidence_note(
+    *,
+    city: str,
+    matches: List[Tuple[Hospital, float]],
+    chosen_tier: Optional[str],
+    present_tiers: Tuple[str, ...],
+    auto: bool,
+    condition_count: int,
+    match_strategy: str,
+) -> str:
+    strategy_note = ""
+    if match_strategy == "multiple_hospitals":
+        strategy_note = " using different hospitals per specialty"
+    elif match_strategy == "multi_speciality":
+        strategy_note = " using multi-speciality hospitals"
+    elif match_strategy == "fallback":
+        strategy_note = " using the closest available matches"
+
+    if matches:
+        if auto:
+            tier_list = ", ".join(t.lower() for t in present_tiers)
+            return (
+                f"Range spans the {tier_list} tier{'s' if len(present_tiers) != 1 else ''} "
+                f"present in {city}, informed by {len(matches)} hospital match"
+                f"{'es' if len(matches) != 1 else ''} across {condition_count} conditions"
+                f"{strategy_note}. Pick a tier above to narrow the estimate."
+            )
+        target = chosen_tier or "Medium"
+        tier_match_count = sum(1 for h, _ in matches if h.cost_level == target)
+        if tier_match_count == 0:
+            other_tiers = sorted({h.cost_level for h, _ in matches})
+            other_label = ", ".join(t.lower() for t in other_tiers)
+            return (
+                f"No {target.lower()}-tier hospitals are indexed in {city}; "
+                f"the estimate uses the {target.lower()}-tier pricing band, "
+                f"and the listed hospitals are {other_label}-tier alternatives"
+                f" across {condition_count} conditions{strategy_note}."
+            )
+        return (
+            f"Estimated against the {target.lower()}-tier pricing band in {city}, "
+            f"informed by {tier_match_count} hospital match"
+            f"{'es' if tier_match_count != 1 else ''} across {condition_count} conditions"
+            f"{strategy_note}. Actual costs vary by hospital, doctor, and treatment plan."
+        )
+    if auto:
+        tier_list = ", ".join(t.lower() for t in present_tiers)
+        return (
+            f"No matching hospitals indexed for {city} across these conditions; "
+            f"range uses the {tier_list} tier base bands as a reference."
+        )
+    return (
+        f"No matching hospitals indexed for {city} at the {chosen_tier.lower() if chosen_tier else ''} "
+        f"tier across these conditions; the base pricing band is used as a reference."
+    )
+
+
+def _build_multi_relevance_summary(
+    *,
+    city: str,
+    matches: List[Tuple[Hospital, float]],
+    required_specs: Tuple[str, ...],
+    match_strategy: str,
+) -> str:
+    if not matches:
+        return f"No matching hospitals indexed for these conditions in {city} yet."
+    parts = [f"{len(matches)} hospital{'s' if len(matches) != 1 else ''} reviewed in {city}"]
+    if required_specs:
+        parts.append(f"{len(required_specs)} specialties requested")
+    if match_strategy == "multiple_hospitals":
+        parts.append("different hospitals per specialty")
+    elif match_strategy == "multi_speciality":
+        parts.append("multi-speciality focus")
+    return "; ".join(parts) + "."
 
 
 def _build_confidence_note(
@@ -907,6 +1241,8 @@ __all__ = [
     "CONSULTATION_MULT",
     "hospitals_in_city",
     "resolve_condition",
+    "resolve_conditions",
     "match_hospitals",
+    "match_hospitals_multi",
     "estimate",
 ]

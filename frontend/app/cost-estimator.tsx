@@ -3,9 +3,6 @@ import {
   ActivityIndicator,
   Animated,
   Easing,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -16,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
+import KeyboardAwareScreenScrollView from '../components/KeyboardAwareScreenScrollView';
 import { colors, shadows, spacing, typography } from '../constants/theme';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -170,17 +168,13 @@ export default function CostEstimatorScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <Header onBack={handleBack} />
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      <KeyboardAwareScreenScrollView
+        style={styles.keyboardScroll}
+        contentContainerStyle={styles.scrollContent}
       >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
           {/* ── HERO ─────────────────────────────────────── */}
           <View style={styles.hero}>
+            <View style={styles.heroAccentGlow} pointerEvents="none" />
             <Text style={styles.heroEyebrow}>EUNOIA · COST ESTIMATOR</Text>
             <Text style={styles.heroTitle}>Plan ahead with calm clarity.</Text>
             <Text style={styles.heroBody}>
@@ -383,8 +377,7 @@ export default function CostEstimatorScreen() {
           )}
 
           <View style={{ height: 80 }} />
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAwareScreenScrollView>
     </SafeAreaView>
   );
 }
@@ -870,7 +863,11 @@ function capitalize(s: string): string {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: colors.backgroundSecondary,
+  },
+  keyboardScroll: {
+    flex: 1,
+    backgroundColor: colors.backgroundSecondary,
   },
   // ── Header ──────────────────────────────────────────────────
   header: {
@@ -881,7 +878,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
-    backgroundColor: colors.background,
+    backgroundColor: colors.backgroundSecondary,
   },
   headerBtn: {
     width: 40,
@@ -903,27 +900,37 @@ const styles = StyleSheet.create({
   },
 
   scrollContent: {
+    backgroundColor: colors.backgroundSecondary,
     paddingBottom: 80,
   },
 
   // ── Hero ────────────────────────────────────────────────────
   hero: {
-    paddingHorizontal: spacing.screenPadding,
-    paddingTop: spacing.xxl,
-    paddingBottom: spacing.lg,
+    marginHorizontal: spacing.screenPadding,
+    marginTop: spacing.xxl,
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.xxl,
+    paddingVertical: spacing.xxl,
+    borderRadius: spacing.cardRadiusXl,
+    backgroundColor: colors.inkSurface,
+    borderWidth: 1,
+    borderColor: colors.inkBorderStrong,
+    overflow: 'hidden',
+    position: 'relative',
+    ...shadows.lg,
   },
   heroEyebrow: {
     ...typography.overline,
-    color: colors.textMuted,
+    color: colors.textInverseSubtle,
     marginBottom: spacing.sm,
   },
   heroTitle: {
     ...typography.largeTitle,
-    color: colors.textPrimary,
+    color: colors.textInverse,
   },
   heroBody: {
     ...typography.body,
-    color: colors.textSecondary,
+    color: colors.textInverseMuted,
     marginTop: spacing.md,
   },
 
@@ -945,7 +952,7 @@ const styles = StyleSheet.create({
   },
   sectionEyebrow: {
     ...typography.overline,
-    color: colors.textMuted,
+    color: colors.accent,
     fontVariant: ['tabular-nums'],
   },
   sectionTitle: {
@@ -963,7 +970,8 @@ const styles = StyleSheet.create({
     borderRadius: spacing.cardRadiusLg,
     padding: spacing.lg,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: colors.accentSoftBorder,
+    ...shadows.sm,
   },
   cityRow: {
     flexDirection: 'row',
@@ -974,9 +982,9 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: colors.backgroundTertiary,
+    backgroundColor: colors.accentMuted,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: colors.accentSoftBorder,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1018,7 +1026,8 @@ const styles = StyleSheet.create({
     borderRadius: spacing.cardRadiusLg,
     padding: spacing.lg,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderColor: colors.accentSoftBorder,
+    ...shadows.sm,
   },
   conditionInput: {
     ...typography.body,
@@ -1052,8 +1061,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   chipActive: {
-    backgroundColor: colors.inkSurface,
-    borderColor: colors.inkSurface,
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
   },
   chipLabel: {
     ...typography.callout,
@@ -1086,7 +1095,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingVertical: spacing.lg,
     borderRadius: spacing.buttonRadius,
-    backgroundColor: colors.inkSurface,
+    backgroundColor: colors.accent,
     ...shadows.md,
   },
   primaryCtaDisabled: {

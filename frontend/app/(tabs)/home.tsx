@@ -337,10 +337,10 @@ function RiskScoreCard({
   // Map risk level → semantic accent + soft surface (existing tokens only).
   const riskTone =
     riskLevel === 'High'
-      ? { fg: colors.error, bg: colors.errorSoft, dot: colors.error }
+      ? { fg: colors.error, bg: colors.errorSoft }
       : riskLevel === 'Moderate'
-      ? { fg: colors.warning, bg: colors.warningSoft, dot: colors.warning }
-      : { fg: colors.success, bg: colors.successSoft, dot: colors.success };
+      ? { fg: colors.warning, bg: colors.warningSoft }
+      : { fg: colors.accent, bg: colors.accentMuted };
 
   return (
     <View style={riskCardStyles.section}>
@@ -377,15 +377,16 @@ function RiskScoreCard({
               </View>
               <View
                 style={[
-                  riskCardStyles.riskBadge,
-                  { backgroundColor: riskTone.bg, borderColor: riskTone.fg },
+                  riskCardStyles.riskSummary,
+                  {
+                    backgroundColor: riskTone.bg,
+                    borderLeftColor: riskTone.fg,
+                  },
                 ]}
               >
-                <View
-                  style={[riskCardStyles.riskDot, { backgroundColor: riskTone.dot }]}
-                />
-                <Text style={[riskCardStyles.riskBadgeText, { color: riskTone.fg }]}>
-                  {(riskLevel ?? '').toUpperCase()} RISK
+                <Text style={riskCardStyles.riskSummaryLabel}>RISK LEVEL</Text>
+                <Text style={[riskCardStyles.riskSummaryValue, { color: riskTone.fg }]}>
+                  {riskLevel}
                 </Text>
               </View>
             </View>
@@ -777,7 +778,6 @@ export default function Home() {
               <Ionicons name="calculator-outline" size={18} color={colors.textPrimary} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={costEstimatorStyles.eyebrow}>NEW</Text>
               <Text style={costEstimatorStyles.title}>Medical cost estimator</Text>
               <Text style={costEstimatorStyles.subtitle}>
                 Approximate ranges by city, condition, and hospital tier
@@ -1524,25 +1524,24 @@ const riskCardStyles = StyleSheet.create({
     color: colors.textTertiary,
   },
 
-  riskBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  riskSummary: {
     alignSelf: 'flex-start',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: spacing.chipRadius,
-    borderWidth: 1,
+    minWidth: 112,
+    borderLeftWidth: 3,
+    borderRadius: spacing.inputRadius,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
     marginTop: spacing.md,
   },
-  riskDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  riskBadgeText: {
-    ...typography.overline,
+  riskSummaryLabel: {
+    ...typography.captionSmall,
+    color: colors.textTertiary,
     fontSize: 10,
+    lineHeight: 13,
+  },
+  riskSummaryValue: {
+    ...typography.headline,
+    marginTop: 1,
   },
 
   miniBars: {
@@ -1641,12 +1640,6 @@ const costEstimatorStyles = StyleSheet.create({
     borderColor: colors.surfaceBorder,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  eyebrow: {
-    ...typography.overline,
-    fontSize: 9,
-    color: colors.accent,
-    marginBottom: 2,
   },
   title: {
     ...typography.headline,

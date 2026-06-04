@@ -6,12 +6,13 @@ import {
   FlatList,
   TextInput,
   TouchableOpacity,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Keyboard,
+  useWindowDimensions,
+  type KeyboardEvent,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../contexts/AuthContext';
 import axios from 'axios';
@@ -38,6 +39,8 @@ interface PrescriptionItem {
 
 export default function Chat() {
   const { token } = useAuth();
+  const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -45,20 +48,66 @@ export default function Chat() {
   const [inputFocused, setInputFocused] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const [prescriptions, setPrescriptions] = useState<PrescriptionItem[]>([]);
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [composerHeight, setComposerHeight] = useState(80);
+  const [keyboardFrame, setKeyboardFrame] = useState({
+    visible: false,
+    screenY: 0,
+    height: 0,
+  });
+
+  const tabBarBottomOffset =
+    Platform.OS === 'ios'
+      ? Math.max(insets.bottom, 12) + 4
+      : Math.max(insets.bottom, 8) + 8;
+  const tabBarClearance = tabBarBottomOffset + 64;
+  const keyboardTop =
+    keyboardFrame.screenY > 0
+      ? keyboardFrame.screenY
+      : windowHeight - keyboardFrame.height;
+  const keyboardOverlap = keyboardFrame.visible
+    ? Math.max(0, Math.min(keyboardFrame.height, windowHeight - keyboardTop))
+    : 0;
+  const composerBottom = keyboardFrame.visible ? keyboardOverlap : tabBarClearance;
+  const reservedComposerSpace = composerHeight + composerBottom + spacing.lg;
+
+  const syncKeyboardMetrics = () => {
+    const metrics = Keyboard.metrics();
+    if (!metrics) return;
+    setKeyboardFrame({
+      visible: true,
+      screenY: metrics.screenY,
+      height: metrics.height,
+    });
+  };
 
   useEffect(() => {
+    const handleKeyboardShow = (event: KeyboardEvent) => {
+      setKeyboardFrame({
+        visible: true,
+        screenY: event.endCoordinates.screenY,
+        height: event.endCoordinates.height,
+      });
+    };
+    const handleKeyboardHide = () => {
+      setKeyboardFrame({ visible: false, screenY: 0, height: 0 });
+    };
+
     const showSub = Keyboard.addListener(
       Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      () => setKeyboardVisible(true),
+      handleKeyboardShow,
     );
     const hideSub = Keyboard.addListener(
       Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => setKeyboardVisible(false),
+      handleKeyboardHide,
     );
+    const frameSub =
+      Platform.OS === 'ios'
+        ? Keyboard.addListener('keyboardWillChangeFrame', handleKeyboardShow)
+        : null;
     return () => {
       showSub.remove();
       hideSub.remove();
+      frameSub?.remove();
     };
   }, []);
 
@@ -73,6 +122,22 @@ export default function Chat() {
       }, 100);
     }
   }, [messages.length, isLoading]);
+
+  useEffect(() => {
+    if (keyboardFrame.visible) {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    }
+  }, [keyboardFrame.visible]);
+
+  useEffect(() => {
+    if (!isLoading) {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: false });
+      }, 50);
+    }
+  }, [reservedComposerSpace, isLoading]);
 
   const loadChatHistory = async () => {
     try {
@@ -183,10 +248,6 @@ export default function Chat() {
             <Text style={styles.headerEyebrow}>EUNOIA · ASSISTANT</Text>
             <Text style={styles.headerTitle}>Health AI</Text>
           </View>
-          <View style={styles.headerStatus}>
-            <View style={styles.statusDot} />
-            <Text style={styles.statusText}>Online</Text>
-          </View>
         </View>
 
         <View style={styles.headerRule} />
@@ -224,14 +285,14 @@ export default function Chat() {
         )}
 
         {/* ── Chat body ────────────────────────────────────── */}
-        <KeyboardAvoidingView
-          style={styles.keyboardAvoid}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={0}
-        >
           <View style={styles.chatWrapper}>
             {messages.length === 0 ? (
-              <View style={styles.emptyContainer}>
+              <View
+                style={[
+                  styles.emptyContainer,
+                  { paddingBottom: reservedComposerSpace },
+                ]}
+              >
                 <View style={styles.emptyIconWrap}>
                   <Ionicons name="sparkles-outline" size={28} color={colors.textPrimary} />
                 </View>
@@ -267,7 +328,10 @@ export default function Chat() {
                 data={messages}
                 renderItem={renderMessage}
                 keyExtractor={(_, index) => index.toString()}
-                contentContainerStyle={styles.chatContent}
+                contentContainerStyle={[
+                  styles.chatContent,
+                  { paddingBottom: reservedComposerSpace },
+                ]}
                 onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
                 onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
                 keyboardDismissMode="on-drag"
@@ -278,9 +342,15 @@ export default function Chat() {
 
           {/* ── Input ─────────────────────────────────────── */}
           <View
+            onLayout={(event) => {
+              const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+              setComposerHeight((current) =>
+                Math.abs(current - nextHeight) > 1 ? nextHeight : current,
+              );
+            }}
             style={[
               styles.inputOuter,
-              keyboardVisible && styles.inputOuterKeyboard,
+              { bottom: composerBottom },
             ]}
           >
             <View style={[styles.inputContainer, inputFocused && styles.inputContainerFocused]}>
@@ -293,7 +363,10 @@ export default function Chat() {
                 multiline
                 maxLength={500}
                 editable={!isSending}
-                onFocus={() => setInputFocused(true)}
+                onFocus={() => {
+                  setInputFocused(true);
+                  syncKeyboardMetrics();
+                }}
                 onBlur={() => setInputFocused(false)}
               />
               <TouchableOpacity
@@ -317,7 +390,6 @@ export default function Chat() {
               </TouchableOpacity>
             </View>
           </View>
-        </KeyboardAvoidingView>
       </View>
     </SafeAreaView>
   );
@@ -331,6 +403,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+    position: 'relative',
   },
   centerContainer: {
     flex: 1,
@@ -356,29 +429,6 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     ...typography.largeTitle,
-    color: colors.textPrimary,
-  },
-  headerStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: spacing.chipRadius,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    marginTop: 8,
-  },
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.success,
-  },
-  statusText: {
-    ...typography.captionSmall,
-    fontWeight: '600',
     color: colors.textPrimary,
   },
   headerRule: {
@@ -428,16 +478,12 @@ const styles = StyleSheet.create({
   },
 
   // ─── Chat body ───────────────────────────────────────────
-  keyboardAvoid: {
-    flex: 1,
-  },
   chatWrapper: {
     flex: 1,
   },
   chatContent: {
     paddingHorizontal: spacing.screenPadding,
     paddingTop: spacing.lg,
-    paddingBottom: spacing.lg,
     flexGrow: 1,
   },
   emptyContainer: {
@@ -567,16 +613,13 @@ const styles = StyleSheet.create({
 
   // ─── Input ───────────────────────────────────────────────
   inputOuter: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
     paddingHorizontal: spacing.screenPadding,
     paddingTop: spacing.md,
-    paddingBottom: 96,
-    backgroundColor: colors.background,
-  },
-  inputOuterKeyboard: {
-    // When the keyboard is up the floating tab bar is hidden (Android)
-    // or pushed off-screen by KeyboardAvoidingView (iOS), so collapse
-    // the bottom padding that normally clears the tab bar.
     paddingBottom: spacing.md,
+    backgroundColor: colors.background,
   },
   inputContainer: {
     flexDirection: 'row',

@@ -19,6 +19,7 @@
         "backgroundColor": "#030712"
       },
       "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "resize",
       "package": "com.yourcompany.healthassistant",
       "permissions": [
         "CAMERA",

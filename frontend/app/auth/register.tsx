@@ -11,7 +11,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../contexts/AuthContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import KeyboardAwareScreenScrollView from '../../components/KeyboardAwareScreenScrollView';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, shadows, typography } from '../../constants/theme';
 
@@ -50,9 +50,8 @@ export default function Register() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAwareScrollView
+      <KeyboardAwareScreenScrollView
         contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
       >
         <View style={styles.header}>
           <View style={styles.brandRow}>
@@ -157,7 +156,7 @@ export default function Register() {
         <Text style={styles.footnote}>
           By continuing you agree to our terms and privacy policy.
         </Text>
-      </KeyboardAwareScrollView>
+      </KeyboardAwareScreenScrollView>
     </SafeAreaView>
   );
 }

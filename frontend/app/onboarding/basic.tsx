@@ -1,8 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -12,6 +9,7 @@ import { router } from 'expo-router';
 
 import OnboardingShell from '../../components/onboarding/OnboardingShell';
 import ChoiceCard from '../../components/onboarding/ChoiceCard';
+import KeyboardAwareScreenScrollView from '../../components/KeyboardAwareScreenScrollView';
 import {
   useOnboarding,
   type BasicProfile,
@@ -284,15 +282,10 @@ export default function Basic() {
       onAdvance={handleAdvance}
       advanceLabel={C.advanceLabel}
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.kav}
+      <KeyboardAwareScreenScrollView
+        style={styles.keyboardScroll}
+        contentContainerStyle={styles.scroll}
       >
-        <ScrollView
-          contentContainerStyle={styles.scroll}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
           {/* ── Heading ─────────────────────────────── */}
           <View style={styles.heading}>
             <Text style={styles.headline}>{C.headline}</Text>
@@ -420,8 +413,7 @@ export default function Basic() {
               accessibilityHint={C.fields.weightKg.hint}
             />
           </Field>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAwareScreenScrollView>
     </OnboardingShell>
   );
 }
@@ -452,7 +444,7 @@ function Field({ label, hint, error, children }: FieldProps) {
 
 // ── Styles ────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  kav: {
+  keyboardScroll: {
     flex: 1,
   },
   scroll: {

@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -13,6 +12,7 @@ import { colors, shadows, spacing, typography } from '../../constants/theme';
 import { ONBOARDING_COPY } from '../../constants/onboarding';
 import OnboardingShell from '../../components/onboarding/OnboardingShell';
 import Chip from '../../components/onboarding/Chip';
+import KeyboardAwareScreenScrollView from '../../components/KeyboardAwareScreenScrollView';
 import { useOnboarding } from '../../contexts/OnboardingContext';
 import type { MedicalHistory } from '../../utils/onboardingApi';
 
@@ -176,11 +176,9 @@ export default function MedicalHistoryScreen() {
       onAdvance={handleAdvance}
       advanceLabel={ONBOARDING_COPY.medical.advanceLabel}
     >
-      <ScrollView
+      <KeyboardAwareScreenScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
       >
         <Text style={styles.headline} accessibilityRole="header">
           {ONBOARDING_COPY.medical.headline}
@@ -215,7 +213,7 @@ export default function MedicalHistoryScreen() {
             {ONBOARDING_COPY.medical.capMessage}
           </Text>
         ) : null}
-      </ScrollView>
+      </KeyboardAwareScreenScrollView>
     </OnboardingShell>
   );
 }
