@@ -1,0 +1,7 @@
+{
+  "Latency": "Measured 100 attempts per available local module. AI/network timings need external_latency.csv.",
+  "Robustness": "Measured on 20 constructed queries and 100 variants; not clinical validation.",
+  "Specialty accuracy": "Pending independent labelled cases in specialty_labels.csv.",
+  "Prescription extraction": "Pending verified reference and actual extracted fields in prescription_fields.csv.",
+  "Usability": "Pending observed participant trials in usability.csv."
+}

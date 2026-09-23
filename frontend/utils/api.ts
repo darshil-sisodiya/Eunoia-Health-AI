@@ -1,48 +1,69 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
-// Prefer EXPO_PUBLIC_ env (injected by Expo) and fall back to Constants.extra
-const rawEnv = process.env.EXPO_PUBLIC_BACKEND_URL || (Constants.expoConfig as any)?.extra?.EXPO_PUBLIC_BACKEND_URL;
+// Port the FastAPI backend listens on (see backend/run.ps1).
+const BACKEND_PORT = process.env.EXPO_PUBLIC_BACKEND_PORT || '8000';
 
 const normalize = (url?: string) => (url ? url.replace(/\/$/, '') : undefined);
 
+// An explicit override always wins: set EXPO_PUBLIC_BACKEND_URL (in .env, or via
+// the eas.json / app.json extra) to point at a deployed backend. Leave it unset
+// for local dev and the LAN IP is auto-detected below, so it never needs
+// hand-editing when you change Wi-Fi networks.
+const explicit = normalize(
+  process.env.EXPO_PUBLIC_BACKEND_URL ||
+    (Constants.expoConfig as any)?.extra?.EXPO_PUBLIC_BACKEND_URL
+);
+
+// The host serving the Metro bundle IS the dev machine, so it's also the right
+// host for the backend. hostUri looks like "172.51.134.254:8081" or
+// "exp://172.51.134.254:8081".
 const deriveFromHostUri = (): string | undefined => {
-  // Works in Expo Go: hostUri looks like "192.168.1.10:19000" or "exp://192.168.1.10:8081"
-  const hostUri = (Constants.expoConfig as any)?.hostUri || (Constants.manifest2 as any)?.extra?.expoClient?.hostUri || (Constants.manifest as any)?.hostUri;
+  const hostUri: string | undefined =
+    (Constants.expoConfig as any)?.hostUri ||
+    (Constants.manifest2 as any)?.extra?.expoClient?.hostUri ||
+    (Constants.manifest as any)?.hostUri;
   if (!hostUri) return undefined;
-  const match = /([\d\.]+)(?::\d+)?/.exec(hostUri);
-  const host = match?.[1];
-  return host ? `http://${host}:8000` : undefined;
+
+  // Strip the scheme, then any path, then the port, leaving a bare host.
+  const host = hostUri
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .split('/')[0]
+    .split(':')[0];
+
+  return host ? `http://${host}:${BACKEND_PORT}` : undefined;
 };
 
-let base = normalize(rawEnv);
+// Loopback means "this device" — on a phone or emulator that is not the dev
+// machine. Android emulators map the host loopback to 10.0.2.2; a physical
+// device has to go over the LAN.
+const isLoopback = (url: string) => /\/\/(localhost|127\.0\.0\.1)\b/.test(url);
 
-// If using localhost, fix it for emulators/devices. If missing, try to derive from Expo host.
-if (!base || base.includes('localhost') || base.includes('127.0.0.1')) {
-  if (Platform.OS === 'android') {
-    // Android emulator maps host loopback to 10.0.2.2
-    if (base && (base.includes('localhost') || base.includes('127.0.0.1'))) {
-      base = base.replace('localhost', '10.0.2.2').replace('127.0.0.1', '10.0.2.2');
-    } else {
-      base = deriveFromHostUri() || 'http://10.0.2.2:8000';
-    }
-  } else if (Platform.OS === 'ios') {
-    // iOS Simulator can use localhost, physical devices need LAN IP
-    const derived = deriveFromHostUri();
-    if (!base || base.includes('localhost') || base.includes('127.0.0.1')) {
-      base = derived || base;
-    }
-  } else {
-    base = deriveFromHostUri() || base;
-  }
-}
+const resolveBase = (): string | undefined => {
+  // A real remote URL (Railway, staging) is used as-is.
+  if (explicit && !isLoopback(explicit)) return explicit;
 
-if (!base) {
-  // As a last resort, keep it empty but warn in dev
-  if (__DEV__) {
-    // eslint-disable-next-line no-console
-    console.warn('API_BASE_URL is not set. Set EXPO_PUBLIC_BACKEND_URL in frontend/.env');
+  // Otherwise prefer the auto-detected dev machine over a loopback address.
+  const derived = deriveFromHostUri();
+  if (derived) return derived;
+
+  if (explicit && isLoopback(explicit)) {
+    return Platform.OS === 'android'
+      ? explicit.replace(/localhost|127\.0\.0\.1/, '10.0.2.2')
+      : explicit;
   }
+
+  return Platform.OS === 'android' ? `http://10.0.2.2:${BACKEND_PORT}` : undefined;
+};
+
+const base = resolveBase();
+
+if (!base && __DEV__) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    'API_BASE_URL is not set and could not be derived from the Expo host. ' +
+      'Set EXPO_PUBLIC_BACKEND_URL in frontend/.env.'
+  );
 }
 
 export const API_BASE_URL: string = base || '';

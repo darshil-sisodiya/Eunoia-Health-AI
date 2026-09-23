@@ -22,6 +22,9 @@ import ProgressMessages from '../../components/onboarding/ProgressMessages';
 import { ONBOARDING_COPY } from '../../constants/onboarding';
 import { colors, shadows, spacing, typography } from '../../constants/theme';
 import { useAuth } from '../../contexts/AuthContext';
+import { routeForStepId } from '../../utils/onboardingFlow';
+import { buildAnalyzePayload, isSubmittable } from '../../utils/onboardingPayload';
+import type { StepId } from '../../constants/onboardingSteps';
 import { useOnboarding } from '../../contexts/OnboardingContext';
 import {
   analyzeRisk,
@@ -38,27 +41,21 @@ const ERROR_TIMEOUT_MS = 30000;
 /** One full revolution of the soft accent dot. */
 const DOT_ROTATION_DURATION_MS = 1500;
 
-/** Maps a 400 `loc[1]` step-field to its onboarding step + route. */
-const STEP_ROUTE_BY_LOC: Record<
-  string,
-  { step: number; pathname: string }
-> = {
-  basic: { step: 2, pathname: '/onboarding/basic' },
-  lifestyle: { step: 3, pathname: '/onboarding/lifestyle' },
-  medical: { step: 4, pathname: '/onboarding/medical' },
-  family_history: { step: 5, pathname: '/onboarding/family' },
-  location: { step: 6, pathname: '/onboarding/location' },
-};
-
-// Maps the slice required to submit -> the step the user should be
-// returned to when the slice is missing from the draft.
-const STEP_ROUTE_BY_SLICE: Record<
-  'basic' | 'lifestyle' | 'location',
-  { step: number; pathname: string }
-> = {
-  basic: STEP_ROUTE_BY_LOC.basic,
-  lifestyle: STEP_ROUTE_BY_LOC.lifestyle,
-  location: STEP_ROUTE_BY_LOC.location,
+/**
+ * Maps a 400's `loc[1]` payload field to the step that owns it.
+ *
+ * Step ids, not indices: the route for a step comes from the step graph, so
+ * inserting a step cannot silently send someone to the wrong screen.
+ */
+const STEP_ID_BY_FIELD: Record<string, StepId> = {
+  basic: 'basic',
+  lifestyle: 'lifestyle',
+  medical: 'conditions',
+  family_history: 'family',
+  vitals: 'vitals',
+  mental: 'mental',
+  womens_health: 'womens',
+  location: 'location',
 };
 
 type Mode = 'loading' | 'error';
@@ -91,7 +88,7 @@ type PendingAction = 'idle' | 'retrying' | 'cancelling';
  */
 export default function Analyzing() {
   const { token } = useAuth();
-  const { draft, markStep } = useOnboarding();
+  const { draft, goTo } = useOnboarding();
 
   const [mode, setMode] = useState<Mode>('loading');
   const [pendingAction, setPendingAction] = useState<PendingAction>('idle');
@@ -154,31 +151,25 @@ export default function Analyzing() {
     });
   }, []);
 
-  /** Routes the user back to the step that owns `slice`. */
+  /** Routes the user back to the step that owns `field`. */
   const routeBackToStep = useCallback(
-    (slice: 'basic' | 'lifestyle' | 'medical' | 'family_history' | 'location') => {
-      const target = STEP_ROUTE_BY_LOC[slice];
-      if (!target) return;
-      markStep(target.step);
-      router.replace(target.pathname as any);
+    (field: string) => {
+      const stepId = STEP_ID_BY_FIELD[field];
+      if (!stepId) return;
+      goTo(stepId);
+      router.replace(routeForStepId(stepId) as never);
     },
-    [markStep],
+    [goTo],
   );
 
   // ── Build the AnalyzeRiskRequest payload from the draft ───────
   // If any required slice is missing we never start a request; we
   // route back to the step that owns the slice instead.
+  // One shared builder, also used by the result screen's save path. Two
+  // copies of a request body is how the two ends drift apart.
   const buildPayload = useCallback((): AnalyzeRiskRequest | null => {
-    if (!draft.basic) return null;
-    if (!draft.lifestyle) return null;
-    if (!draft.location) return null;
-    return {
-      basic: draft.basic,
-      lifestyle: draft.lifestyle,
-      medical: draft.medical,
-      family_history: { conditions: draft.family_history },
-      location: draft.location,
-    };
+    if (!isSubmittable(draft)) return null;
+    return buildAnalyzePayload(draft);
   }, [draft]);
 
   // ── Run a single request attempt ──────────────────────────────
@@ -271,11 +262,9 @@ export default function Analyzing() {
               loc.length >= 2 &&
               loc[0] === 'body' &&
               typeof loc[1] === 'string' &&
-              STEP_ROUTE_BY_LOC[loc[1]]
+              STEP_ID_BY_FIELD[loc[1]]
             ) {
-              const target = STEP_ROUTE_BY_LOC[loc[1]];
-              markStep(target.step);
-              router.replace(target.pathname as any);
+              routeBackToStep(loc[1]);
               return;
             }
           }
@@ -295,7 +284,6 @@ export default function Analyzing() {
     draft.basic,
     draft.lifestyle,
     draft.location,
-    markStep,
     navigateToResult,
     routeBackToStep,
     token,
@@ -340,9 +328,9 @@ export default function Analyzing() {
     generationRef.current += 1;
     clearErrorTimer();
     clearMinVisibleTimer();
-    markStep(6);
-    router.replace('/onboarding/location' as any);
-  }, [clearErrorTimer, clearMinVisibleTimer, markStep, pendingAction]);
+    goTo('location');
+    router.replace(routeForStepId('location') as never);
+  }, [clearErrorTimer, clearMinVisibleTimer, goTo, pendingAction]);
 
   const buttonsDisabled = pendingAction !== 'idle';
 

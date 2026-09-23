@@ -17,9 +17,13 @@ import { useAuth } from '@/contexts/AuthContext';
 import { uploadPrescription, getPrescriptionHistory, PrescriptionAnalysis } from '@/utils/api';
 import { MarkdownText } from '@/components/MarkdownText';
 import { colors, spacing, shadows, typography } from '@/constants/theme';
+import { useHealthProfile } from '@/contexts/HealthProfileContext';
 
 export default function PrescriptionsScreen() {
   const { token } = useAuth();
+  // The real medication and allergy lists, so an upload can be checked
+  // against them and can add to them.
+  const { data: profile, patch: patchProfile } = useHealthProfile();
   const [prescriptions, setPrescriptions] = useState<PrescriptionAnalysis[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -93,11 +97,65 @@ export default function PrescriptionsScreen() {
       setUploading(false);
       loadPrescriptions().catch(console.error);
       setSelectedPrescription(analysis);
+      offerToSaveMedication(analysis);
     } catch (error: any) {
       setUploading(false);
       Alert.alert('Error', error.message || 'Failed to upload prescription');
       console.error(error);
     }
+  };
+
+  /**
+   * Offer to add a newly seen drug to the profile's medication list.
+   *
+   * This is the link that makes the modules feel like one app: what the
+   * camera reads becomes part of the health record, which re-scores the risk
+   * assessment and, from then on, is what future prescriptions get checked
+   * against for interactions.
+   */
+  const offerToSaveMedication = (analysis: PrescriptionAnalysis) => {
+    const name = (analysis.medication_name || '').trim();
+    if (!name) return;
+
+    const known = (profile?.medications ?? []).some(
+      (m) => m.name.trim().toLowerCase() === name.toLowerCase(),
+    );
+    if (known) return;
+
+    Alert.alert(
+      'Add to your medications?',
+      `Keep ${name} on your profile so we can check future prescriptions against it and keep your risk score current.`,
+      [
+        { text: 'Not now', style: 'cancel' },
+        {
+          text: 'Add',
+          onPress: async () => {
+            try {
+              await patchProfile('medications', {
+                medications: [
+                  ...(profile?.medications ?? []).map((m) => ({
+                    name: m.name,
+                    dose: m.dose ?? null,
+                    frequency: m.frequency ?? null,
+                    started_bucket: m.started_bucket ?? 'unknown',
+                    for_condition: m.for_condition ?? null,
+                    adherence: m.adherence ?? 'unknown',
+                  })),
+                  {
+                    name,
+                    dose: analysis.dosage ?? null,
+                    started_bucket: 'lt_1m' as const,
+                    adherence: 'unknown' as const,
+                  },
+                ],
+              });
+            } catch {
+              Alert.alert('Could not save', 'Your medication list was not updated.');
+            }
+          },
+        },
+      ],
+    );
   };
 
   const showUploadOptions = () => {

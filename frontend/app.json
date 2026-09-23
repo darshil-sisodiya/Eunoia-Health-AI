@@ -60,7 +60,6 @@
     },
     "extra": {
       "router": {},
-      "EXPO_PUBLIC_BACKEND_URL": "http://192.168.1.6:8000",
       "eas": {
         "projectId": "d264382d-4ca2-4025-896f-8b22f22d8e8a"
       }

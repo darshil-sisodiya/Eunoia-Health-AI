@@ -6,7 +6,6 @@ import {
   Text,
   View,
 } from 'react-native';
-import { router } from 'expo-router';
 
 import OnboardingShell from '../../components/onboarding/OnboardingShell';
 import ChoiceCard from '../../components/onboarding/ChoiceCard';
@@ -15,7 +14,7 @@ import {
   ONBOARDING_COPY,
   type LifestyleQuestionId,
 } from '../../constants/onboarding';
-import { useOnboarding } from '../../contexts/OnboardingContext';
+import { useOnboardingStep } from '../../utils/useOnboardingStep';
 import type { Lifestyle } from '../../utils/onboardingApi';
 import { colors, spacing, typography } from '../../constants/theme';
 
@@ -41,7 +40,8 @@ import { colors, spacing, typography } from '../../constants/theme';
  * typography literals.
  */
 export default function LifestyleScreen() {
-  const { draft, setLifestyle, markStep } = useOnboarding();
+  const { draft, setLifestyle, step, totalSteps, goNext, goBack } =
+    useOnboardingStep('lifestyle');
 
   // Local index over the six lifestyle sub-questions. The global step
   // indicator stays at `03 / 07`; this is the inner pacing.
@@ -127,9 +127,8 @@ export default function LifestyleScreen() {
       setSubIndex((i) => i + 1);
       return;
     }
-    // Finished all six sub-questions — advance to step 4 (Medical History).
-    markStep(4);
-    router.push('/onboarding/medical' as never);
+    // All sub-questions answered; the step graph decides what comes next.
+    goNext();
   };
 
   const handleBack = () => {
@@ -138,7 +137,7 @@ export default function LifestyleScreen() {
       setSubIndex((i) => i - 1);
       return;
     }
-    router.back();
+    goBack();
   };
 
   const fillWidth = innerProgress.interpolate({
@@ -149,7 +148,8 @@ export default function LifestyleScreen() {
 
   return (
     <OnboardingShell
-      step={3}
+      step={step}
+      totalSteps={totalSteps}
       eyebrow={currentQuestion.eyebrow}
       canAdvance
       onBack={handleBack}
@@ -221,11 +221,11 @@ function initialProgress(subIndex: number): number {
  * id. Returns `undefined` when the user has not yet answered it.
  */
 function readLifestyleValue(
-  lifestyle: Lifestyle | null,
+  lifestyle: Partial<Lifestyle> | null,
   id: LifestyleQuestionId,
 ): Lifestyle[keyof Lifestyle] | undefined {
   if (!lifestyle) return undefined;
-  return (lifestyle as Partial<Lifestyle>)[id];
+  return lifestyle[id];
 }
 
 const styles = StyleSheet.create({

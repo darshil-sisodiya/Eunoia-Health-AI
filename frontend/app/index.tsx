@@ -47,9 +47,11 @@ export default function Index() {
         return;
       }
 
-      // Authenticated: resume the redesigned onboarding flow if a recent draft
-      // exists, otherwise drop into the main app. The 30-minute TTL is enforced
-      // inside `loadDraft`, which clears stale entries before returning null.
+      // Authenticated: resume onboarding if a draft survives, otherwise drop
+      // into the main app. The TTL is enforced inside `loadDraft`, which
+      // clears stale entries before returning null. We land on welcome and
+      // let the onboarding layout resolve the actual step, because which
+      // steps apply depends on the answers in the draft.
       let hasDraft = false;
       try {
         const stored = await loadDraft();

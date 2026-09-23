@@ -291,3 +291,80 @@ export const ONBOARDING_COPY = {
 } as const;
 
 export type OnboardingCopy = typeof ONBOARDING_COPY;
+
+// ── Medical catalogues ─────────────────────────────────────────
+// Local fallbacks. `GET /api/health/catalog` is the source of truth so new
+// options do not have to be hand-synced into the app — the same pattern
+// `getCities` + KARNATAKA_CITIES_FALLBACK already uses. These keep the
+// screens usable offline and on a first paint.
+//
+// Keep names in step with `backend/risk_engine.py::CONDITION_BASE`: an
+// unrecognised condition still scores, but at a generic default weight rather
+// than its real one.
+
+export const CONDITION_OPTIONS: readonly string[] = [
+  'Hypertension',
+  'Type 2 Diabetes',
+  'Type 1 Diabetes',
+  'High Cholesterol',
+  'Asthma',
+  'COPD',
+  'Heart Disease',
+  'Chronic Kidney Disease',
+  'Stroke',
+  'Hypothyroidism',
+  'Hyperthyroidism',
+  'PCOS/PCOD',
+  'Depression',
+  'Anxiety',
+  'GERD/Acid Reflux',
+  'Arthritis',
+  'Migraine',
+  'Anemia',
+  'Cancer',
+];
+
+export const MEDICATION_OPTIONS: readonly string[] = [
+  'Metformin',
+  'Insulin',
+  'Levothyroxine',
+  'Atorvastatin',
+  'Amlodipine',
+  'Losartan',
+  'Telmisartan',
+  'Omeprazole',
+  'Pantoprazole',
+  'Salbutamol Inhaler',
+  'Aspirin (Low-dose)',
+  'Iron supplements',
+  'Vitamin D',
+  'Vitamin B12',
+  'Multivitamin',
+  'Birth control pill',
+];
+
+export const ALLERGY_OPTIONS: readonly string[] = [
+  'Penicillin',
+  'Sulfa drugs',
+  'Aspirin/NSAIDs',
+  'Pollen',
+  'Dust mites',
+  'Peanuts',
+  'Tree nuts',
+  'Shellfish',
+  'Eggs',
+  'Dairy/Lactose',
+  'Gluten',
+  'Latex',
+  'Bee stings',
+];
+
+/**
+ * Case-insensitive substring filter. An empty query returns the list
+ * unchanged. Pure, so it is safe to call during render.
+ */
+export function filterOptions(options: readonly string[], query: string): string[] {
+  const q = query.toLowerCase().trim();
+  if (!q) return [...options];
+  return options.filter((option) => option.toLowerCase().includes(q));
+}

@@ -1,0 +1,6 @@
+scope,feature,attempts,successful,median_ms,p95_ms
+local function,Bangalore estimator,100,100,45.7333,77.890465
+local function,Karnataka estimator,100,100,0.353,1.7430449999999988
+local function,PDF rendering,100,100,22.656100000000002,34.95427
+local function,Risk scoring,100,100,0.1877,0.8097749999999997
+local function,Specialty mapping,100,100,20.17375,36.26767999999999

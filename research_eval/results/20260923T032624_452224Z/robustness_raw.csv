@@ -1,0 +1,101 @@
+case_id,original,variant_type,variant,original_prediction,variant_prediction,agreement
+0,skin itching,Uppercase,SKIN ITCHING,Dermatology,Dermatology,1
+0,skin itching,Punctuation,skin itching!!!,Dermatology,Dermatology,1
+0,skin itching,Extra spaces,skin   itching,Dermatology,Dermatology,1
+0,skin itching,Single typo,skin itcing,Dermatology,General Physician,0
+0,skin itching,Authored rewording,my skin feels itchy,Dermatology,Dermatology,1
+1,knee pain,Uppercase,KNEE PAIN,Orthopedics,Orthopedics,1
+1,knee pain,Punctuation,knee pain!!!,Orthopedics,Orthopedics,1
+1,knee pain,Extra spaces,knee   pain,Orthopedics,Orthopedics,1
+1,knee pain,Single typo,kne pain,Orthopedics,General Physician,0
+1,knee pain,Authored rewording,pain in my knee,Orthopedics,General Physician,0
+2,blurred vision,Uppercase,BLURRED VISION,Ophthalmology,Ophthalmology,1
+2,blurred vision,Punctuation,blurred vision!!!,Ophthalmology,Ophthalmology,1
+2,blurred vision,Extra spaces,blurred   vision,Ophthalmology,Ophthalmology,1
+2,blurred vision,Single typo,blured vision,Ophthalmology,General Physician,0
+2,blurred vision,Authored rewording,my vision is blurry,Ophthalmology,Ophthalmology,1
+3,ear pain,Uppercase,EAR PAIN,ENT,ENT,1
+3,ear pain,Punctuation,ear pain!!!,ENT,ENT,1
+3,ear pain,Extra spaces,ear   pain,ENT,ENT,1
+3,ear pain,Single typo,ear pan,ENT,General Physician,0
+3,ear pain,Authored rewording,pain in my ear,ENT,ENT,1
+4,tooth pain,Uppercase,TOOTH PAIN,Dentistry,Dentistry,1
+4,tooth pain,Punctuation,tooth pain!!!,Dentistry,Dentistry,1
+4,tooth pain,Extra spaces,tooth   pain,Dentistry,Dentistry,1
+4,tooth pain,Single typo,toth pain,Dentistry,General Physician,0
+4,tooth pain,Authored rewording,my tooth hurts,Dentistry,General Physician,0
+5,acid reflux,Uppercase,ACID REFLUX,Gastroenterology,Gastroenterology,1
+5,acid reflux,Punctuation,acid reflux!!!,Gastroenterology,Gastroenterology,1
+5,acid reflux,Extra spaces,acid   reflux,Gastroenterology,Gastroenterology,1
+5,acid reflux,Single typo,acid refux,Gastroenterology,General Physician,0
+5,acid reflux,Authored rewording,reflux of stomach acid,Gastroenterology,Gastroenterology,1
+6,migraine,Uppercase,MIGRAINE,Neurology,Neurology,1
+6,migraine,Punctuation,migraine!!!,Neurology,Neurology,1
+6,migraine,Extra spaces,migraine,Neurology,Neurology,1
+6,migraine,Single typo,migrine,Neurology,General Physician,0
+6,migraine,Authored rewording,I have a migraine,Neurology,Neurology,1
+7,hair loss,Uppercase,HAIR LOSS,Dermatology,Dermatology,1
+7,hair loss,Punctuation,hair loss!!!,Dermatology,Dermatology,1
+7,hair loss,Extra spaces,hair   loss,Dermatology,Dermatology,1
+7,hair loss,Single typo,har loss,Dermatology,General Physician,0
+7,hair loss,Authored rewording,my hair is falling out,Dermatology,Dentistry,0
+8,back pain,Uppercase,BACK PAIN,Orthopedics,Orthopedics,1
+8,back pain,Punctuation,back pain!!!,Orthopedics,Orthopedics,1
+8,back pain,Extra spaces,back   pain,Orthopedics,Orthopedics,1
+8,back pain,Single typo,bak pain,Orthopedics,General Physician,0
+8,back pain,Authored rewording,pain in my back,Orthopedics,General Physician,0
+9,nasal congestion,Uppercase,NASAL CONGESTION,General Physician,General Physician,1
+9,nasal congestion,Punctuation,nasal congestion!!!,General Physician,General Physician,1
+9,nasal congestion,Extra spaces,nasal   congestion,General Physician,General Physician,1
+9,nasal congestion,Single typo,nasal congetion,General Physician,General Physician,1
+9,nasal congestion,Authored rewording,my nose is congested,General Physician,General Physician,1
+10,frequent urination,Uppercase,FREQUENT URINATION,Urology,Urology,1
+10,frequent urination,Punctuation,frequent urination!!!,Urology,Urology,1
+10,frequent urination,Extra spaces,frequent   urination,Urology,Urology,1
+10,frequent urination,Single typo,frequent urintion,Urology,General Physician,0
+10,frequent urination,Authored rewording,I urinate frequently,Urology,General Physician,0
+11,difficulty sleeping,Uppercase,DIFFICULTY SLEEPING,Psychiatry,Psychiatry,1
+11,difficulty sleeping,Punctuation,difficulty sleeping!!!,Psychiatry,Psychiatry,1
+11,difficulty sleeping,Extra spaces,difficulty   sleeping,Psychiatry,Psychiatry,1
+11,difficulty sleeping,Single typo,diffiulty sleeping,Psychiatry,General Physician,0
+11,difficulty sleeping,Authored rewording,I find it difficult to sleep,Psychiatry,General Physician,0
+12,joint stiffness,Uppercase,JOINT STIFFNESS,Orthopedics,Orthopedics,1
+12,joint stiffness,Punctuation,joint stiffness!!!,Orthopedics,Orthopedics,1
+12,joint stiffness,Extra spaces,joint   stiffness,Orthopedics,Orthopedics,1
+12,joint stiffness,Single typo,joint stifness,Orthopedics,General Physician,0
+12,joint stiffness,Authored rewording,my joints feel stiff,Orthopedics,Orthopedics,1
+13,dry eyes,Uppercase,DRY EYES,Ophthalmology,Ophthalmology,1
+13,dry eyes,Punctuation,dry eyes!!!,Ophthalmology,Ophthalmology,1
+13,dry eyes,Extra spaces,dry   eyes,Ophthalmology,Ophthalmology,1
+13,dry eyes,Single typo,dry eys,Ophthalmology,General Physician,0
+13,dry eyes,Authored rewording,my eyes feel dry,Ophthalmology,Rheumatology,0
+14,sore throat,Uppercase,SORE THROAT,General Physician,General Physician,1
+14,sore throat,Punctuation,sore throat!!!,General Physician,General Physician,1
+14,sore throat,Extra spaces,sore   throat,General Physician,General Physician,1
+14,sore throat,Single typo,sore thrat,General Physician,General Physician,1
+14,sore throat,Authored rewording,my throat feels sore,General Physician,ENT,0
+15,persistent cough,Uppercase,PERSISTENT COUGH,Pulmonology,Pulmonology,1
+15,persistent cough,Punctuation,persistent cough!!!,Pulmonology,Pulmonology,1
+15,persistent cough,Extra spaces,persistent   cough,Pulmonology,Pulmonology,1
+15,persistent cough,Single typo,persitent cough,Pulmonology,General Physician,0
+15,persistent cough,Authored rewording,I keep coughing,Pulmonology,General Physician,0
+16,anxiety,Uppercase,ANXIETY,Psychiatry,Psychiatry,1
+16,anxiety,Punctuation,anxiety!!!,Psychiatry,Psychiatry,1
+16,anxiety,Extra spaces,anxiety,Psychiatry,Psychiatry,1
+16,anxiety,Single typo,anxety,Psychiatry,General Physician,0
+16,anxiety,Authored rewording,I feel anxious,Psychiatry,Psychiatry,1
+17,constipation,Uppercase,CONSTIPATION,Gastroenterology,Gastroenterology,1
+17,constipation,Punctuation,constipation!!!,Gastroenterology,Gastroenterology,1
+17,constipation,Extra spaces,constipation,Gastroenterology,Gastroenterology,1
+17,constipation,Single typo,constiation,Gastroenterology,General Physician,0
+17,constipation,Authored rewording,I am constipated,Gastroenterology,Gynecology,0
+18,high blood pressure,Uppercase,HIGH BLOOD PRESSURE,Cardiology,Cardiology,1
+18,high blood pressure,Punctuation,high blood pressure!!!,Cardiology,Cardiology,1
+18,high blood pressure,Extra spaces,high   blood   pressure,Cardiology,Cardiology,1
+18,high blood pressure,Single typo,high blood presure,Cardiology,Internal Medicine,0
+18,high blood pressure,Authored rewording,high bp,Cardiology,Cardiology,1
+19,shortness of breath,Uppercase,SHORTNESS OF BREATH,Pulmonology,Pulmonology,1
+19,shortness of breath,Punctuation,shortness of breath!!!,Pulmonology,Pulmonology,1
+19,shortness of breath,Extra spaces,shortness   of   breath,Pulmonology,Pulmonology,1
+19,shortness of breath,Single typo,shorness of breath,Pulmonology,General Physician,0
+19,shortness of breath,Authored rewording,sob,Pulmonology,Pulmonology,1

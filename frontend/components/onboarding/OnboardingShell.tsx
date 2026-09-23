@@ -14,8 +14,14 @@ import { colors, shadows, spacing, typography } from '../../constants/theme';
 export type OnboardingShellProps = {
   /** 1-based current step index (1..totalSteps). */
   step: number;
-  /** Total number of steps in the flow. Defaults to 7 (per design § "Step 1–7"). */
-  totalSteps?: number;
+  /**
+   * Total number of steps for THIS user.
+   *
+   * Required, with no default: the flow is adaptive, so the count depends on
+   * the draft. A default of 7 would quietly render the wrong denominator for
+   * anyone whose flow branches.
+   */
+  totalSteps: number;
   /** Categorical label rendered above the body (typography.overline). */
   eyebrow: string;
   /** Disables the primary CTA when false. */
@@ -55,7 +61,7 @@ export type OnboardingShellProps = {
  */
 export default function OnboardingShell({
   step,
-  totalSteps = 7,
+  totalSteps,
   eyebrow,
   canAdvance,
   onBack,

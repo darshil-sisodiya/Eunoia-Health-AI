@@ -1,0 +1,6 @@
+variant,cases,agreeing,agreement_percent
+Uppercase,20,20,100.0
+Punctuation,20,20,100.0
+Extra spaces,20,20,100.0
+Single typo,20,2,10.0
+Authored rewording,20,10,50.0

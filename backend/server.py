@@ -9,7 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from typing import List, Optional, Dict, Any, Literal
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import jwt
 from passlib.hash import bcrypt
 import asyncio
@@ -33,6 +33,7 @@ from cities import KARNATAKA_CITIES_SORTED
 # POST /api/analyze-risk. Imported at module load so the path is bound once.
 from risk_engine import compute_risk
 import gemini_insights
+import profile_context
 
 # Medical Cost Estimator (deterministic) + AI-assisted contextual refinement.
 # The estimator is a pure module that loads the Karnataka hospitals dataset
@@ -168,6 +169,64 @@ async def _ensure_column(cur, table: str, column: str, ddl: str) -> None:
     row = await cur.fetchone()
     if row is None:
         await cur.execute(f"ALTER TABLE `{table}` ADD COLUMN `{column}` {ddl}")
+
+
+async def _ensure_column_type(cur, table: str, column: str, column_type: str) -> None:
+    """Idempotently retype an existing column.
+
+    `_ensure_column` deliberately never retypes, but widening an ENUM (adding
+    the 'Very High' risk level) needs exactly that. Compares the live
+    COLUMN_TYPE and only issues MODIFY when it actually differs, so repeated
+    startups are no-ops.
+    """
+    await cur.execute(
+        """
+        SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s
+        """,
+        (table, column),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return  # column absent; the CREATE TABLE above already has the right type
+    current = row["COLUMN_TYPE"] if isinstance(row, dict) else row[0]
+    if str(current).strip().lower() != column_type.strip().lower():
+        await cur.execute(f"ALTER TABLE `{table}` MODIFY COLUMN `{column}` {column_type}")
+
+
+async def _index_columns(cur, table: str, key_name: str) -> List[str]:
+    """The ordered column list of a named index, or [] when it does not exist."""
+    await cur.execute(
+        """
+        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = %s
+        ORDER BY SEQ_IN_INDEX
+        """,
+        (table, key_name),
+    )
+    rows = await cur.fetchall()
+    return [(r["COLUMN_NAME"] if isinstance(r, dict) else r[0]) for r in rows]
+
+
+async def _ensure_unique_key(
+    cur, table: str, key_name: str, columns: List[str],
+    replaces: Optional[List[str]] = None,
+) -> None:
+    """Idempotently add a UNIQUE key, then retire the keys it supersedes.
+
+    Order matters and is not cosmetic. InnoDB uses the leftmost-prefix index
+    to satisfy a foreign key, so `family_history.uq_user_condition`
+    (user_id, condition) is what backs the `user_id` FK. Dropping it first
+    fails with errno 1553. Creating the wider key first leaves another index
+    starting with `user_id` in place, so the drop is then permitted.
+    """
+    if await _index_columns(cur, table, key_name) != columns:
+        cols = ", ".join(f"`{c}`" for c in columns)
+        await cur.execute(f"ALTER TABLE `{table}` ADD UNIQUE KEY `{key_name}` ({cols})")
+
+    for obsolete in (replaces or []):
+        if obsolete != key_name and await _index_columns(cur, table, obsolete):
+            await cur.execute(f"ALTER TABLE `{table}` DROP INDEX `{obsolete}`")
 
 
 async def init_db(conn: aiomysql.Connection):
@@ -307,6 +366,47 @@ async def init_db(conn: aiomysql.Connection):
         await _ensure_column(cur, "health_profiles", "sleep_quality", "VARCHAR(32) NULL")
         await _ensure_column(cur, "health_profiles", "water_intake", "VARCHAR(32) NULL")
 
+        # ---- Risk engine v2 lifestyle quantities. --------------------------
+        # Onboarding previously asked six coarse ordinals, so the upsert wrote
+        # hardcoded `sleep_hours = 7` and `diet_type = 'balanced'` for every
+        # user — fabricated values that were then fed straight into the Gemini
+        # persona and chat prompts. These columns let us store what was asked.
+        for _col, _ddl in (
+            ("cigarettes_per_day", "INT NULL"),
+            ("smoking_years", "INT NULL"),
+            ("smokeless_tobacco", "VARCHAR(32) NULL"),
+            ("alcohol_units_per_week", "DECIMAL(6,2) NULL"),
+            ("exercise_minutes_per_week", "INT NULL"),
+            ("sedentary_hours_per_day", "DECIMAL(4,1) NULL"),
+            ("fruit_veg_servings", "INT NULL"),
+            ("fried_food_per_week", "INT NULL"),
+            ("sugary_drinks_per_week", "INT NULL"),
+            ("cooking_fuel", "VARCHAR(32) NULL"),
+            # Mental-health screeners (PHQ-2, GAD-2), each item 0..3.
+            ("phq2_interest", "TINYINT NULL"),
+            ("phq2_down", "TINYINT NULL"),
+            ("gad2_nervous", "TINYINT NULL"),
+            ("gad2_worry", "TINYINT NULL"),
+            # Lower-cardinality domains kept as JSON: they are read as a whole
+            # and never filtered on, so columns would be churn.
+            ("womens_health", "JSON NULL"),
+            ("screening_history", "JSON NULL"),
+            ("insurance", "JSON NULL"),
+            ("goals", "JSON NULL"),
+            ("date_of_birth", "DATE NULL"),
+            ("blood_group", "VARCHAR(8) NULL"),
+            ("occupation", "VARCHAR(80) NULL"),
+            ("consent_accepted_at", "DATETIME NULL"),
+        ):
+            await _ensure_column(cur, "health_profiles", _col, _ddl)
+
+        # Onboarding does not always collect these, and inventing a value is
+        # worse than admitting we don't have one — the invented numbers were
+        # being fed to the AI as fact. Allow NULL so "not recorded" is
+        # representable.
+        await _ensure_column_type(cur, "health_profiles", "sleep_hours", "INT NULL")
+        await _ensure_column_type(cur, "health_profiles", "diet_type", "VARCHAR(64) NULL")
+
         # Requirement 12.3: family_history with unique (user_id, condition) and ON DELETE CASCADE.
         await cur.execute(
             """
@@ -321,6 +421,19 @@ async def init_db(conn: aiomysql.Connection):
             """
         )
 
+        # Family history now records WHICH relative and at what age of onset.
+        # A first-degree relative with premature onset is one of the strongest
+        # hereditary signals there is, and the old eight-boolean model threw
+        # that away. One row per (condition, relation), so the unique key
+        # widens accordingly.
+        await _ensure_column(cur, "family_history", "relation", "VARCHAR(32) NOT NULL DEFAULT ''")
+        await _ensure_column(cur, "family_history", "onset_bucket", "VARCHAR(16) NOT NULL DEFAULT 'unknown'")
+        await _ensure_unique_key(
+            cur, "family_history", "uq_user_condition_relation",
+            ["user_id", "condition", "relation"],
+            replaces=["uq_user_condition"],
+        )
+
         # Requirement 12.4, 12.6: risk_reports with risk_level ENUM and JSON columns.
         await cur.execute(
             """
@@ -328,12 +441,103 @@ async def init_db(conn: aiomysql.Connection):
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 user_id INT NOT NULL,
                 risk_score INT NOT NULL,
-                risk_level ENUM('Low', 'Moderate', 'High') NOT NULL,
+                risk_level ENUM('Low', 'Moderate', 'High', 'Very High') NOT NULL,
                 wellness_score INT NOT NULL,
                 contributing_factors JSON NOT NULL,
                 ai_analysis JSON NULL,
                 ai_insights_unavailable TINYINT(1) NOT NULL DEFAULT 0,
                 payload_snapshot JSON NOT NULL,
+                created_at DATETIME NOT NULL,
+                KEY idx_user_created (user_id, created_at),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """
+        )
+
+        # Risk engine v2 widened the level set. Existing databases were created
+        # with the three-value ENUM, so retype in place; new ones already match
+        # and this is a no-op.
+        await _ensure_column_type(
+            cur, "risk_reports", "risk_level",
+            "ENUM('Low','Moderate','High','Very High') NOT NULL",
+        )
+        await _ensure_column(cur, "risk_reports", "components", "JSON NULL")
+        await _ensure_column(cur, "risk_reports", "confidence", "JSON NULL")
+        await _ensure_column(cur, "risk_reports", "subscores", "JSON NULL")
+
+        # ---- Structured medical history (risk engine v2). ------------------
+        # These were previously three flat string lists that only ever reached
+        # `risk_reports.payload_snapshot` JSON, so nothing could query them and
+        # nothing could cross-reference a medication against the condition it
+        # treats or an allergy against a new prescription.
+        await cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_conditions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                name VARCHAR(80) NOT NULL,
+                diagnosed_bucket VARCHAR(16) NOT NULL DEFAULT 'unknown',
+                control VARCHAR(16) NOT NULL DEFAULT 'unsure',
+                treatment VARCHAR(16) NOT NULL DEFAULT 'none',
+                severity VARCHAR(16) NULL,
+                hospitalised_12m TINYINT(1) NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                UNIQUE KEY uq_user_condition_name (user_id, name),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """
+        )
+        await cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_medications (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                name VARCHAR(80) NOT NULL,
+                dose VARCHAR(60) NULL,
+                frequency VARCHAR(16) NULL,
+                started_bucket VARCHAR(16) NOT NULL DEFAULT 'unknown',
+                for_condition VARCHAR(80) NULL,
+                adherence VARCHAR(16) NOT NULL DEFAULT 'unknown',
+                created_at DATETIME NOT NULL,
+                UNIQUE KEY uq_user_medication_name (user_id, name),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """
+        )
+        await cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_allergies (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                allergen VARCHAR(80) NOT NULL,
+                category VARCHAR(16) NOT NULL DEFAULT 'other',
+                reaction VARCHAR(24) NULL,
+                created_at DATETIME NOT NULL,
+                UNIQUE KEY uq_user_allergen (user_id, allergen),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """
+        )
+        # Append-only, newest row wins. Keeping history makes a future trend
+        # chart free and lets us show when a reading was last taken.
+        await cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_vitals (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                systolic_mmhg INT NULL,
+                diastolic_mmhg INT NULL,
+                fasting_glucose_mgdl DECIMAL(6,2) NULL,
+                hba1c_percent DECIMAL(4,2) NULL,
+                total_cholesterol_mgdl DECIMAL(6,2) NULL,
+                hdl_mgdl DECIMAL(6,2) NULL,
+                ldl_mgdl DECIMAL(6,2) NULL,
+                triglycerides_mgdl DECIMAL(6,2) NULL,
+                resting_hr_bpm INT NULL,
+                waist_cm DECIMAL(5,2) NULL,
+                declared_unknown JSON NULL,
+                measured_on DATE NULL,
                 created_at DATETIME NOT NULL,
                 KEY idx_user_created (user_id, created_at),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -461,6 +665,13 @@ class BasicProfile(BaseModel):
 
 
 class Lifestyle(BaseModel):
+    """Lifestyle inputs.
+
+    The six original ordinals stay REQUIRED so existing app builds keep
+    validating. Everything added below is optional, and the risk engine
+    prefers a quantity over its ordinal whenever one is present — "regular"
+    smoking covered both 2/day and 40/day.
+    """
     smoking: Literal['never', 'former', 'occasional', 'regular']
     alcohol: Literal['never', 'occasional', 'moderate', 'frequent']
     exercise_frequency: Literal['never', 'occasional', 'regular', 'daily']
@@ -468,14 +679,168 @@ class Lifestyle(BaseModel):
     sleep_quality: Literal['poor', 'fair', 'good', 'excellent']
     stress_level: Literal['low', 'moderate', 'high']
 
+    cigarettes_per_day: Optional[int] = Field(default=None, ge=0, le=100)
+    smoking_years: Optional[int] = Field(default=None, ge=0, le=80)
+    # Gutka, paan masala, khaini, zarda. A major risk driver in India that the
+    # original flow never asked about at all.
+    smokeless_tobacco: Optional[Literal['never', 'former', 'occasional', 'daily']] = None
+    alcohol_units_per_week: Optional[float] = Field(default=None, ge=0, le=200)
+    exercise_minutes_per_week: Optional[int] = Field(default=None, ge=0, le=2000)
+    sedentary_hours_per_day: Optional[float] = Field(default=None, ge=0, le=24)
+    sleep_hours: Optional[float] = Field(default=None, ge=0, le=24)
+    diet_type: Optional[Literal[
+        'vegetarian', 'vegan', 'eggetarian', 'non_vegetarian'
+    ]] = None
+    fruit_veg_servings: Optional[int] = Field(default=None, ge=0, le=20)
+    fried_food_per_week: Optional[int] = Field(default=None, ge=0, le=50)
+    sugary_drinks_per_week: Optional[int] = Field(default=None, ge=0, le=50)
+    cooking_fuel: Optional[Literal['lpg', 'electric', 'biomass', 'kerosene', 'mixed']] = None
+
+
+class ConditionEntry(BaseModel):
+    """A diagnosed condition, with the context that decides how much it matters.
+
+    Duration, control and treatment are what separate a recently-diagnosed,
+    well-managed condition from a decade-old untreated one. v1 stored only the
+    name, so both scored the same: zero.
+    """
+    name: str = Field(min_length=1, max_length=80)
+    diagnosed_bucket: Literal['lt_1y', '1_5y', '5_10y', 'gt_10y', 'unknown'] = 'unknown'
+    control: Literal['well', 'partly', 'poorly', 'unsure'] = 'unsure'
+    treatment: Literal['none', 'lifestyle', 'medication', 'both'] = 'none'
+    severity: Optional[Literal['mild', 'moderate', 'severe']] = None
+    hospitalised_12m: bool = False
+
+
+class MedicationEntry(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    dose: Optional[str] = Field(default=None, max_length=60)
+    frequency: Optional[Literal['od', 'bd', 'tds', 'qds', 'prn', 'weekly', 'other']] = None
+    started_bucket: Literal['lt_1m', '1_6m', '6_12m', '1_5y', 'gt_5y', 'unknown'] = 'unknown'
+    # Free text matching a ConditionEntry.name. This link is what lets the app
+    # explain why a drug is being taken instead of listing it in isolation.
+    for_condition: Optional[str] = Field(default=None, max_length=80)
+    adherence: Literal['always', 'mostly', 'sometimes', 'rarely', 'unknown'] = 'unknown'
+
+
+class AllergyEntry(BaseModel):
+    allergen: str = Field(min_length=1, max_length=80)
+    category: Literal['drug', 'food', 'environmental', 'other'] = 'other'
+    reaction: Optional[Literal[
+        'mild_rash', 'hives', 'swelling', 'breathing', 'anaphylaxis', 'unknown'
+    ]] = None
+
 
 class MedicalHistory(BaseModel):
+    """Medical history, structured.
+
+    The three v1 `List[str]` fields are retained so older clients still
+    validate; the risk engine coerces them into `ConditionEntry` shapes. New
+    clients send the structured lists instead.
+    """
+    conditions: List[ConditionEntry] = Field(default_factory=list, max_length=50)
+    medications: List[MedicationEntry] = Field(default_factory=list, max_length=50)
+    allergy_entries: List[AllergyEntry] = Field(default_factory=list, max_length=50)
+
     existing_conditions: List[str] = Field(default_factory=list, max_length=50)
     allergies: List[str] = Field(default_factory=list, max_length=50)
     current_medications: List[str] = Field(default_factory=list, max_length=50)
 
 
+class Vitals(BaseModel):
+    """Self-reported clinical numbers.
+
+    Three states matter and must stay distinguishable:
+      * a value        -> known
+      * listed in `declared_unknown` -> the user said "I don't know"
+      * neither        -> never asked
+
+    The middle state counts toward completeness (they answered) but not toward
+    confidence (we still don't know the number), and it triggers an
+    unassessed-risk contribution. Missing data must never read as healthy.
+    """
+    systolic_mmhg: Optional[int] = Field(default=None, ge=70, le=260)
+    diastolic_mmhg: Optional[int] = Field(default=None, ge=40, le=160)
+    fasting_glucose_mgdl: Optional[float] = Field(default=None, ge=40, le=500)
+    hba1c_percent: Optional[float] = Field(default=None, ge=3.0, le=18.0)
+    total_cholesterol_mgdl: Optional[float] = Field(default=None, ge=80, le=500)
+    hdl_mgdl: Optional[float] = Field(default=None, ge=10, le=150)
+    ldl_mgdl: Optional[float] = Field(default=None, ge=20, le=400)
+    triglycerides_mgdl: Optional[float] = Field(default=None, ge=20, le=1000)
+    resting_hr_bpm: Optional[int] = Field(default=None, ge=30, le=200)
+    # Predicts South Asian metabolic risk better than BMI, and FINDRISC needs it.
+    waist_cm: Optional[float] = Field(default=None, ge=40, le=200)
+    measured_on: Optional[date] = None
+    declared_unknown: List[str] = Field(default_factory=list, max_length=20)
+
+
+class MentalHealth(BaseModel):
+    """PHQ-2 and GAD-2. Four questions, validated, each scored 0..3."""
+    phq2_interest: Optional[int] = Field(default=None, ge=0, le=3)
+    phq2_down: Optional[int] = Field(default=None, ge=0, le=3)
+    gad2_nervous: Optional[int] = Field(default=None, ge=0, le=3)
+    gad2_worry: Optional[int] = Field(default=None, ge=0, le=3)
+
+
+class WomensHealth(BaseModel):
+    cycle_regularity: Optional[Literal['regular', 'irregular', 'absent', 'unsure']] = None
+    pregnancy_status: Optional[Literal['no', 'pregnant', 'trying', 'postpartum', 'prefer_not_say']] = None
+    menopause_status: Optional[Literal['pre', 'peri', 'post', 'unsure']] = None
+    contraception: Optional[str] = Field(default=None, max_length=60)
+    last_pap_bucket: Optional[Literal['lt_1y', '1_3y', 'gt_3y', 'never', 'unsure']] = None
+    last_mammogram_bucket: Optional[Literal['lt_1y', '1_3y', 'gt_3y', 'never', 'unsure']] = None
+
+
+class ScreeningHistory(BaseModel):
+    last_bp_check: Optional[Literal['lt_6m', '6_12m', '1_3y', 'gt_3y', 'never']] = None
+    last_blood_sugar: Optional[Literal['lt_6m', '6_12m', '1_3y', 'gt_3y', 'never']] = None
+    last_lipid_panel: Optional[Literal['lt_6m', '6_12m', '1_3y', 'gt_3y', 'never']] = None
+    last_dental: Optional[Literal['lt_6m', '6_12m', '1_3y', 'gt_3y', 'never']] = None
+    last_eye_exam: Optional[Literal['lt_6m', '6_12m', '1_3y', 'gt_3y', 'never']] = None
+    last_full_checkup: Optional[Literal['lt_6m', '6_12m', '1_3y', 'gt_3y', 'never']] = None
+
+
+class Insurance(BaseModel):
+    """Feeds the cost estimator's hospital-tier suggestion."""
+    has_insurance: Optional[bool] = None
+    provider: Optional[str] = Field(default=None, max_length=80)
+    sum_insured_band: Optional[Literal[
+        'lt_2l', '2_5l', '5_10l', '10_25l', 'gt_25l', 'unsure'
+    ]] = None
+    out_of_pocket_band: Optional[Literal['lt_5k', '5_25k', '25_1l', 'gt_1l']] = None
+    has_regular_doctor: Optional[bool] = None
+
+
+class Goals(BaseModel):
+    primary_concern: Optional[str] = Field(default=None, max_length=80)
+    focus_areas: List[str] = Field(default_factory=list, max_length=10)
+    target_steps: Optional[int] = Field(default=None, ge=1000, le=40000)
+    target_weight_kg: Optional[float] = Field(default=None, ge=20, le=300)
+
+
+class FamilyEntry(BaseModel):
+    """One hereditary condition, with who had it and when it started."""
+    condition: str
+    relations: List[Literal[
+        'mother', 'father', 'sibling', 'child', 'grandparent', 'other'
+    ]] = Field(default_factory=list, max_length=6)
+    onset_bucket: Literal['lt_50', '50_70', 'gt_70', 'unknown'] = 'unknown'
+
+    @field_validator('condition')
+    @classmethod
+    def _known(cls, v: str) -> str:
+        if v not in HEREDITARY:
+            raise ValueError(f'Unknown hereditary condition: {v}')
+        return v
+
+
 class FamilyHistory(BaseModel):
+    """Family history.
+
+    `entries` is the structured form. `conditions` is the v1 bare-string list,
+    kept so older clients validate; the engine coerces it.
+    """
+    entries: List[FamilyEntry] = Field(default_factory=list, max_length=40)
     conditions: List[str] = Field(default_factory=list)
 
     @field_validator('conditions')
@@ -492,26 +857,94 @@ class Location(BaseModel):
     city: str  # cross-validated against KARNATAKA_CITIES at the endpoint
 
 
+class Activity(BaseModel):
+    """Measured behaviour, folded in by the endpoint from `daily_steps` and
+    `meditation_sessions`.
+
+    The risk engine is pure and never queries a database, so these aggregates
+    are computed by the caller and passed in. Measured activity outranks the
+    self-reported ordinal, which is what lets the score move as habits change
+    instead of being frozen at onboarding.
+    """
+    avg_steps_7d: Optional[float] = Field(default=None, ge=0)
+    meditation_minutes_7d: Optional[float] = Field(default=None, ge=0)
+
+
 class AnalyzeRiskRequest(BaseModel):
     basic: BasicProfile
     lifestyle: Lifestyle
     medical: MedicalHistory
     family_history: FamilyHistory
     location: Location
+    # All optional so an older client's payload still validates unchanged.
+    vitals: Optional[Vitals] = None
+    mental: Optional[MentalHealth] = None
+    womens_health: Optional[WomensHealth] = None
+    screening: Optional[ScreeningHistory] = None
+    insurance: Optional[Insurance] = None
+    goals: Optional[Goals] = None
+
+
+RiskLevel = Literal['Low', 'Moderate', 'High', 'Very High']
+
+RiskComponent = Literal[
+    'conditions', 'cardiovascular', 'metabolic', 'mental_wellness', 'hereditary',
+]
 
 
 class ContributingFactor(BaseModel):
     dimension: str
-    component: Literal['cardiovascular', 'metabolic', 'wellness', 'hereditary']
+    component: RiskComponent
     delta: int
+    # v2 additions. Defaulted so historical `risk_reports.contributing_factors`
+    # rows, written before these existed, still deserialize.
+    label: str = ''
+    kind: Literal['reported', 'measured', 'unassessed'] = 'reported'
+    multiplier: Optional[float] = None
+    explanation: str = ''
+
+
+class ComponentScore(BaseModel):
+    """A component total alongside its cap, so the UI can draw an absolute bar.
+
+    v1 dropped `components` from the response entirely, which forced the
+    dashboard to normalise bars against the largest bucket — a Low-risk user's
+    top bar still rendered full.
+    """
+    score: int
+    cap: int
+
+
+class MissingEvidence(BaseModel):
+    id: str
+    label: str
+    state: Literal['unknown', 'unasked']
+
+
+class Confidence(BaseModel):
+    confidence: int
+    completeness: int
+    missing: List[MissingEvidence] = Field(default_factory=list)
+
+
+class SubScore(BaseModel):
+    """A validated instrument (FINDRISC, PHQ-2, GAD-2) on its own scale."""
+    id: str
+    label: str
+    score: int
+    max: int
+    band: str
+    detail: str
 
 
 class RiskEngineResult(BaseModel):
     risk_score: int
-    risk_level: Literal['Low', 'Moderate', 'High']
+    risk_level: RiskLevel
     wellness_score: int
-    components: Dict[str, int]
+    components: Dict[str, ComponentScore]
     contributing_factors: List[ContributingFactor]
+    confidence: Confidence
+    subscores: List[SubScore] = Field(default_factory=list)
 
 
 class GeminiInsights(BaseModel):
@@ -528,17 +961,28 @@ class AnalyzeRiskResponse(BaseModel):
     report_id: int
     wellness_score: int
     risk_score: int
-    risk_level: Literal['Low', 'Moderate', 'High']
+    risk_level: RiskLevel
     contributing_factors: List[ContributingFactor]
     insights: Optional[GeminiInsights]
     ai_insights_unavailable: bool
     created_at: datetime
+    # v2 additions, defaulted so rows persisted before these columns existed
+    # still deserialize through `GET /api/reports`.
+    components: Dict[str, ComponentScore] = Field(default_factory=dict)
+    confidence: Optional[Confidence] = None
+    subscores: List[SubScore] = Field(default_factory=list)
 
 
 class SaveReportRequest(BaseModel):
+    """Body for `POST /api/save-report`.
+
+    The score fields are accepted for backward compatibility but are NOT
+    trusted: the handler recomputes from `payload_snapshot` so both write
+    paths into `risk_reports` carry the same authority.
+    """
     wellness_score: int
     risk_score: int
-    risk_level: Literal['Low', 'Moderate', 'High']
+    risk_level: RiskLevel
     contributing_factors: List[ContributingFactor]
     insights: Optional[GeminiInsights] = None
     ai_insights_unavailable: bool
@@ -594,6 +1038,136 @@ async def get_cities() -> JSONResponse:
 # 413 response immediate and to make it impossible for an oversized payload to
 # reach the Risk Engine, Gemini, or the database.
 _ANALYZE_RISK_MAX_BODY_BYTES: int = 256 * 1024
+
+
+async def _replace_medical_history(cur, user_id: int, medical: "MedicalHistory", now: datetime) -> None:
+    """Replace the user's conditions, medications and allergies in one pass.
+
+    Accepts both shapes: structured entries when the client sends them, and the
+    v1 bare-string lists otherwise, coerced to conservative defaults (control
+    'unsure', treatment 'none') so a legacy payload does not silently look
+    well-managed.
+    """
+    await cur.execute("DELETE FROM user_conditions WHERE user_id=%s", (user_id,))
+    await cur.execute("DELETE FROM user_medications WHERE user_id=%s", (user_id,))
+    await cur.execute("DELETE FROM user_allergies WHERE user_id=%s", (user_id,))
+
+    conditions = medical.conditions or [
+        ConditionEntry(name=n) for n in medical.existing_conditions if n.strip()
+    ]
+    for entry in conditions:
+        await cur.execute(
+            """
+            INSERT INTO user_conditions
+                (user_id, name, diagnosed_bucket, control, treatment, severity,
+                 hospitalised_12m, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                diagnosed_bucket=VALUES(diagnosed_bucket),
+                control=VALUES(control),
+                treatment=VALUES(treatment),
+                severity=VALUES(severity),
+                hospitalised_12m=VALUES(hospitalised_12m),
+                updated_at=VALUES(updated_at)
+            """,
+            (user_id, entry.name, entry.diagnosed_bucket, entry.control,
+             entry.treatment, entry.severity, 1 if entry.hospitalised_12m else 0,
+             now, now),
+        )
+
+    medications = medical.medications or [
+        MedicationEntry(name=n) for n in medical.current_medications if n.strip()
+    ]
+    for med in medications:
+        await cur.execute(
+            """
+            INSERT INTO user_medications
+                (user_id, name, dose, frequency, started_bucket, for_condition,
+                 adherence, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                dose=VALUES(dose), frequency=VALUES(frequency),
+                started_bucket=VALUES(started_bucket),
+                for_condition=VALUES(for_condition), adherence=VALUES(adherence)
+            """,
+            (user_id, med.name, med.dose, med.frequency, med.started_bucket,
+             med.for_condition, med.adherence, now),
+        )
+
+    allergies = medical.allergy_entries or [
+        AllergyEntry(allergen=a) for a in medical.allergies if a.strip()
+    ]
+    for allergy in allergies:
+        await cur.execute(
+            """
+            INSERT INTO user_allergies
+                (user_id, allergen, category, reaction, created_at)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                category=VALUES(category), reaction=VALUES(reaction)
+            """,
+            (user_id, allergy.allergen, allergy.category, allergy.reaction, now),
+        )
+
+
+async def _insert_vitals(cur, user_id: int, vitals: "Optional[Vitals]", now: datetime) -> None:
+    """Append a vitals row, but only when there is something to record.
+
+    An explicit "I don't know" IS something to record: it is the difference
+    between a question the user answered and one we never asked, and the
+    confidence calculation depends on telling those apart.
+    """
+    if vitals is None:
+        return
+    data = vitals.model_dump()
+    declared = data.pop("declared_unknown", []) or []
+    measured_on = data.pop("measured_on", None)
+    if not any(v is not None for v in data.values()) and not declared:
+        return
+
+    columns = list(data.keys()) + ["declared_unknown", "measured_on", "user_id", "created_at"]
+    values = tuple(data[c] for c in data) + (json.dumps(declared), measured_on, user_id, now)
+    assert len(columns) == len(values)
+    placeholders = ", ".join(["%s"] * len(columns))
+    await cur.execute(
+        f"INSERT INTO user_vitals ({', '.join(columns)}) VALUES ({placeholders})",
+        values,
+    )
+
+
+def _json_or_none(model: Optional[BaseModel]) -> Optional[str]:
+    """Serialise an optional sub-model for a JSON column, or NULL when absent."""
+    return json.dumps(model.model_dump(mode="json")) if model is not None else None
+
+
+async def _recent_activity(user_id: int) -> Dict[str, Optional[float]]:
+    """Seven-day averages of what the user actually did.
+
+    Returns ``{}``-safe values: any missing history yields None, which the
+    risk engine reads as "fall back to the self-reported answer".
+    """
+    steps = await fetch_one(
+        """
+        SELECT AVG(step_count) AS avg_steps FROM daily_steps
+        WHERE user_id=%s AND date >= (CURDATE() - INTERVAL 7 DAY)
+        """,
+        (user_id,),
+    )
+    meditation = await fetch_one(
+        """
+        SELECT SUM(duration_seconds) AS total FROM meditation_sessions
+        WHERE user_id=%s AND completed_at >= (NOW() - INTERVAL 7 DAY)
+        """,
+        (user_id,),
+    )
+    avg_steps = (steps or {}).get("avg_steps")
+    total_seconds = (meditation or {}).get("total")
+    return {
+        "avg_steps_7d": float(avg_steps) if avg_steps is not None else None,
+        "meditation_minutes_7d": (
+            float(total_seconds) / 60.0 if total_seconds is not None else None
+        ),
+    }
 
 
 def _format_validation_errors(exc: ValidationError) -> List[Dict[str, Any]]:
@@ -701,6 +1275,23 @@ async def analyze_risk(
 
     payload_dict = payload.model_dump()
 
+    # ---- Measured behaviour (risk engine v2). ------------------------------
+    # The engine is pure and never touches the database, so the 7-day
+    # aggregates are computed here and handed in. Measured activity outranks
+    # the self-reported ordinal, which is what lets the score respond to what
+    # the user actually does rather than staying frozen at onboarding.
+    payload_dict["activity"] = await _recent_activity(user_id)
+
+    # `mental` is optional on the request; an empty model keeps the persistence
+    # branches below free of None-checks on every field.
+    mental = payload.mental or MentalHealth()
+
+    # Derived, not generated. The persona used to be written only by the
+    # legacy profile endpoint, so anyone who onboarded through this flow had
+    # it left NULL and the chat prompt read "Persona: N/A". Deriving it adds
+    # no latency to a request that already has a 20-second budget.
+    health_persona = profile_context.derive_persona(payload.lifestyle.model_dump())
+
     # ---- Risk Engine (Requirements 9.3, 9.9). ------------------------------
     # 5-second deadline runs the pure function in a worker thread so the event
     # loop stays free. Any timeout / unhandled exception returns 500 *before*
@@ -800,6 +1391,27 @@ async def analyze_risk(
                             water_intake=%s,
                             sleep_pattern=%s,
                             hydration_level=%s,
+                            sleep_hours=COALESCE(%s, sleep_hours),
+                            diet_type=COALESCE(%s, diet_type),
+                            cigarettes_per_day=%s,
+                            smoking_years=%s,
+                            smokeless_tobacco=%s,
+                            alcohol_units_per_week=%s,
+                            exercise_minutes_per_week=%s,
+                            sedentary_hours_per_day=%s,
+                            fruit_veg_servings=%s,
+                            fried_food_per_week=%s,
+                            sugary_drinks_per_week=%s,
+                            cooking_fuel=%s,
+                            phq2_interest=%s,
+                            phq2_down=%s,
+                            gad2_nervous=%s,
+                            gad2_worry=%s,
+                            womens_health=%s,
+                            screening_history=%s,
+                            insurance=%s,
+                            goals=%s,
+                            health_persona=%s,
                             updated_at=%s
                         WHERE user_id=%s
                         """,
@@ -816,6 +1428,27 @@ async def analyze_risk(
                             payload.lifestyle.water_intake,
                             payload.lifestyle.sleep_quality,
                             payload.lifestyle.water_intake,
+                            payload.lifestyle.sleep_hours,
+                            payload.lifestyle.diet_type,
+                            payload.lifestyle.cigarettes_per_day,
+                            payload.lifestyle.smoking_years,
+                            payload.lifestyle.smokeless_tobacco,
+                            payload.lifestyle.alcohol_units_per_week,
+                            payload.lifestyle.exercise_minutes_per_week,
+                            payload.lifestyle.sedentary_hours_per_day,
+                            payload.lifestyle.fruit_veg_servings,
+                            payload.lifestyle.fried_food_per_week,
+                            payload.lifestyle.sugary_drinks_per_week,
+                            payload.lifestyle.cooking_fuel,
+                            mental.phq2_interest,
+                            mental.phq2_down,
+                            mental.gad2_nervous,
+                            mental.gad2_worry,
+                            _json_or_none(payload.womens_health),
+                            _json_or_none(payload.screening),
+                            _json_or_none(payload.insurance),
+                            _json_or_none(payload.goals),
+                            health_persona,
                             now,
                             user_id,
                         ),
@@ -829,6 +1462,13 @@ async def analyze_risk(
                             stress_level, exercise_frequency, diet_type,
                             age, gender, height, weight,
                             smoking, alcohol, sleep_quality, water_intake,
+                            cigarettes_per_day, smoking_years, smokeless_tobacco,
+                            alcohol_units_per_week, exercise_minutes_per_week,
+                            sedentary_hours_per_day, fruit_veg_servings,
+                            fried_food_per_week, sugary_drinks_per_week, cooking_fuel,
+                            phq2_interest, phq2_down, gad2_nervous, gad2_worry,
+                            womens_health, screening_history, insurance, goals,
+                            health_persona,
                             created_at, updated_at
                         ) VALUES (
                             %s,
@@ -836,17 +1476,29 @@ async def analyze_risk(
                             %s, %s, %s,
                             %s, %s, %s, %s,
                             %s, %s, %s, %s,
+                            %s, %s, %s,
+                            %s, %s,
+                            %s, %s,
+                            %s, %s, %s,
+                            %s, %s, %s, %s,
+                            %s, %s, %s, %s,
+                            %s,
                             %s, %s
                         )
                         """,
                         (
                             user_id,
                             payload.lifestyle.sleep_quality,  # sleep_pattern
-                            7,                                 # sleep_hours default
+                            # Real answers when onboarding collected them.
+                            # These used to be hardcoded 7 and "balanced" for
+                            # every user, and those invented values were then
+                            # interpolated into the Gemini persona and chat
+                            # prompts as if they were fact.
+                            payload.lifestyle.sleep_hours,
                             payload.lifestyle.water_intake,    # hydration_level
                             payload.lifestyle.stress_level,
                             payload.lifestyle.exercise_frequency,
-                            "balanced",                        # diet_type default
+                            payload.lifestyle.diet_type,
                             payload.basic.age,
                             payload.basic.gender,
                             payload.basic.height_cm,
@@ -855,6 +1507,25 @@ async def analyze_risk(
                             payload.lifestyle.alcohol,
                             payload.lifestyle.sleep_quality,
                             payload.lifestyle.water_intake,
+                            payload.lifestyle.cigarettes_per_day,
+                            payload.lifestyle.smoking_years,
+                            payload.lifestyle.smokeless_tobacco,
+                            payload.lifestyle.alcohol_units_per_week,
+                            payload.lifestyle.exercise_minutes_per_week,
+                            payload.lifestyle.sedentary_hours_per_day,
+                            payload.lifestyle.fruit_veg_servings,
+                            payload.lifestyle.fried_food_per_week,
+                            payload.lifestyle.sugary_drinks_per_week,
+                            payload.lifestyle.cooking_fuel,
+                            mental.phq2_interest,
+                            mental.phq2_down,
+                            mental.gad2_nervous,
+                            mental.gad2_worry,
+                            _json_or_none(payload.womens_health),
+                            _json_or_none(payload.screening),
+                            _json_or_none(payload.insurance),
+                            _json_or_none(payload.goals),
+                            health_persona,
                             now,
                             now,
                         ),
@@ -867,11 +1538,42 @@ async def analyze_risk(
                     "DELETE FROM family_history WHERE user_id=%s",
                     (user_id,),
                 )
-                for cond in payload.family_history.conditions:
-                    await cur.execute(
-                        "INSERT INTO family_history (user_id, `condition`, created_at) VALUES (%s, %s, %s)",
-                        (user_id, cond, now),
-                    )
+                # Structured entries carry the relation and onset age; the v1
+                # bare-string list is still accepted and stored with an empty
+                # relation so older clients keep working.
+                if payload.family_history.entries:
+                    for entry in payload.family_history.entries:
+                        relations = entry.relations or ['']
+                        for relation in relations:
+                            await cur.execute(
+                                """
+                                INSERT INTO family_history
+                                    (user_id, `condition`, relation, onset_bucket, created_at)
+                                VALUES (%s, %s, %s, %s, %s)
+                                """,
+                                (user_id, entry.condition, relation, entry.onset_bucket, now),
+                            )
+                else:
+                    for cond in payload.family_history.conditions:
+                        await cur.execute(
+                            """
+                            INSERT INTO family_history
+                                (user_id, `condition`, relation, onset_bucket, created_at)
+                            VALUES (%s, %s, '', 'unknown', %s)
+                            """,
+                            (user_id, cond, now),
+                        )
+
+                # ---- Structured medical history. --------------------------
+                # Replace-in-place, same pattern as family_history. This is the
+                # first time conditions, medications and allergies land in
+                # queryable columns instead of being buried in
+                # `risk_reports.payload_snapshot`.
+                await _replace_medical_history(cur, user_id, payload.medical, now)
+
+                # Vitals are append-only history, so only write a row when the
+                # user actually told us something this time.
+                await _insert_vitals(cur, user_id, payload.vitals, now)
 
                 # risk_reports: one row per call, with payload_snapshot,
                 # contributing_factors JSON, ai_analysis JSON or NULL, and
@@ -883,8 +1585,9 @@ async def analyze_risk(
                         risk_score, risk_level, wellness_score,
                         contributing_factors, ai_analysis,
                         ai_insights_unavailable,
-                        payload_snapshot, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        payload_snapshot, created_at,
+                        components, confidence, subscores
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         user_id,
@@ -896,6 +1599,9 @@ async def analyze_risk(
                         1 if ai_insights_unavailable else 0,
                         payload_snapshot_json,
                         now,
+                        json.dumps(risk["components"]),
+                        json.dumps(risk["confidence"]),
+                        json.dumps(risk["subscores"]),
                     ),
                 )
                 report_id = int(cur.lastrowid or 0)
@@ -923,6 +1629,9 @@ async def analyze_risk(
         insights=GeminiInsights(**insights_dict) if insights_dict else None,
         ai_insights_unavailable=ai_insights_unavailable,
         created_at=now,
+        components={k: ComponentScore(**v) for k, v in risk["components"].items()},
+        confidence=Confidence(**risk["confidence"]),
+        subscores=[SubScore(**s) for s in risk["subscores"]],
     )
 
 # ==================== ONBOARDING / SAVE-REPORT + REPORTS ENDPOINTS ====================
@@ -972,14 +1681,25 @@ async def save_report(
         logger.error("save-report: database pool not initialized")
         raise HTTPException(status_code=500, detail="Failed to persist report")
 
+    # Recompute rather than trust the body. `analyze-risk` scores server-side,
+    # so if this path took the client's numbers the same table would hold rows
+    # of two different authorities. The snapshot is the full request, which is
+    # exactly what the engine needs.
+    try:
+        risk = compute_risk(payload.payload_snapshot)
+    except Exception:
+        logger.exception("save-report: recompute from payload_snapshot failed")
+        raise HTTPException(status_code=400, detail="Invalid payload_snapshot")
+
     now = to_dt(datetime.utcnow())
-    contributing_factors_json = json.dumps(
-        [f.model_dump() for f in payload.contributing_factors]
-    )
+    contributing_factors_json = json.dumps(risk["contributing_factors"])
     ai_analysis_json = (
         json.dumps(payload.insights.model_dump()) if payload.insights is not None else None
     )
     payload_snapshot_json = json.dumps(payload.payload_snapshot, default=str)
+    components_json = json.dumps(risk["components"])
+    confidence_json = json.dumps(risk["confidence"])
+    subscores_json = json.dumps(risk["subscores"])
 
     try:
         async with db_pool.acquire() as conn:
@@ -991,19 +1711,23 @@ async def save_report(
                         risk_score, risk_level, wellness_score,
                         contributing_factors, ai_analysis,
                         ai_insights_unavailable,
-                        payload_snapshot, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        payload_snapshot, created_at,
+                        components, confidence, subscores
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         user_id,
-                        int(payload.risk_score),
-                        payload.risk_level,
-                        int(payload.wellness_score),
+                        int(risk["risk_score"]),
+                        risk["risk_level"],
+                        int(risk["wellness_score"]),
                         contributing_factors_json,
                         ai_analysis_json,
                         1 if payload.ai_insights_unavailable else 0,
                         payload_snapshot_json,
                         now,
+                        components_json,
+                        confidence_json,
+                        subscores_json,
                     ),
                 )
                 report_id = int(cur.lastrowid or 0)
@@ -1034,7 +1758,8 @@ async def get_reports(username: str = Depends(verify_token)) -> List[AnalyzeRisk
         """
         SELECT id, risk_score, risk_level, wellness_score,
                contributing_factors, ai_analysis,
-               ai_insights_unavailable, created_at
+               ai_insights_unavailable, created_at,
+               components, confidence, subscores
         FROM risk_reports
         WHERE user_id=%s
         ORDER BY created_at DESC, id DESC
@@ -1059,6 +1784,32 @@ async def get_reports(username: str = Depends(verify_token)) -> List[AnalyzeRisk
         except (TypeError, ValidationError):
             insights = None
 
+        # Rows written before the v2 columns existed decode to None; the
+        # response model defaults cover them, so old reports still render.
+        components_decoded = _parse_json_column(row.get("components"))
+        confidence_decoded = _parse_json_column(row.get("confidence"))
+        subscores_decoded = _parse_json_column(row.get("subscores"))
+
+        try:
+            components = {
+                k: ComponentScore(**v) for k, v in (components_decoded or {}).items()
+            }
+        except (TypeError, ValidationError):
+            components = {}
+        try:
+            confidence = (
+                Confidence(**confidence_decoded)
+                if isinstance(confidence_decoded, dict) else None
+            )
+        except (TypeError, ValidationError):
+            confidence = None
+        try:
+            subscores = [
+                SubScore(**s) for s in (subscores_decoded or [])
+            ] if isinstance(subscores_decoded, list) else []
+        except (TypeError, ValidationError):
+            subscores = []
+
         out.append(
             AnalyzeRiskResponse(
                 report_id=int(row["id"]),
@@ -1069,10 +1820,449 @@ async def get_reports(username: str = Depends(verify_token)) -> List[AnalyzeRisk
                 insights=insights,
                 ai_insights_unavailable=bool(row["ai_insights_unavailable"]),
                 created_at=row["created_at"],
+                components=components,
+                confidence=confidence,
+                subscores=subscores,
             )
         )
 
     return out
+
+
+# ==================== PROFILE BUNDLE / PROGRESSIVE PROFILING ====================
+# The app had no single source of truth for the persisted profile, so every
+# screen re-fetched its own slice and none of them agreed. These three
+# endpoints back one client-side store.
+
+# Section weights for the completeness meter. They mirror the risk engine's
+# confidence weights where the two overlap, so the "how complete" number and
+# the "how confident" number never tell contradictory stories.
+PROFILE_SECTIONS: List[Dict[str, Any]] = [
+    {"id": "basic", "label": "About you", "weight": 10},
+    {"id": "vitals", "label": "Vitals and lab numbers", "weight": 22},
+    {"id": "conditions", "label": "Conditions", "weight": 16},
+    {"id": "medications", "label": "Medications", "weight": 12},
+    {"id": "allergies", "label": "Allergies", "weight": 8},
+    {"id": "family", "label": "Family history", "weight": 10},
+    {"id": "lifestyle", "label": "Lifestyle", "weight": 10},
+    {"id": "mental", "label": "Mood and stress", "weight": 6},
+    {"id": "screening", "label": "Screening history", "weight": 3},
+    {"id": "insurance", "label": "Insurance and budget", "weight": 3},
+]
+
+_NEXT_BEST_COPY: Dict[str, Dict[str, str]] = {
+    "vitals": {
+        "title": "Add your latest health numbers",
+        "body": "Blood pressure and blood sugar change your risk picture more than anything else you can tell us.",
+        "cta": "Add vitals",
+    },
+    "conditions": {
+        "title": "Tell us about your conditions",
+        "body": "How long you have had a condition, and how well it is controlled, changes the result a lot.",
+        "cta": "Add details",
+    },
+    "medications": {
+        "title": "List what you take",
+        "body": "We use this to check new prescriptions for interactions.",
+        "cta": "Add medications",
+    },
+    "allergies": {
+        "title": "Record your allergies",
+        "body": "This lets us flag a prescription containing something you react to.",
+        "cta": "Add allergies",
+    },
+    "family": {
+        "title": "Add family history detail",
+        "body": "Which relative, and at what age it started, matters more than the condition alone.",
+        "cta": "Add detail",
+    },
+    "lifestyle": {
+        "title": "Fill in the amounts",
+        "body": "Exact hours of sleep and minutes of exercise sharpen the estimate.",
+        "cta": "Update lifestyle",
+    },
+    "mental": {
+        "title": "Two minutes on mood",
+        "body": "Four short questions give a far better read than a single stress rating.",
+        "cta": "Start",
+    },
+    "screening": {
+        "title": "When were your last check-ups?",
+        "body": "We will remind you when something is due.",
+        "cta": "Add dates",
+    },
+    "insurance": {
+        "title": "Add your cover",
+        "body": "We use this to suggest a hospital tier you can actually afford.",
+        "cta": "Add cover",
+    },
+    "basic": {
+        "title": "Complete your profile",
+        "body": "A few basics let us tailor everything else.",
+        "cta": "Continue",
+    },
+}
+
+
+def _section_done(section_id: str, data: Dict[str, Any]) -> bool:
+    """Whether a profile section counts as answered.
+
+    An explicit "I don't know" on a vital counts as done: the user answered,
+    and nagging them again helps nobody. It still lowers the risk engine's
+    confidence separately.
+    """
+    profile = data.get("profile") or {}
+    vitals = data.get("vitals") or {}
+
+    if section_id == "basic":
+        return all(profile.get(k) is not None for k in ("age", "gender", "height", "weight"))
+
+    if section_id == "vitals":
+        declared = _parse_json_column(vitals.get("declared_unknown")) or []
+        answered = [
+            k for k in ("systolic_mmhg", "fasting_glucose_mgdl", "hba1c_percent",
+                        "ldl_mgdl", "total_cholesterol_mgdl", "waist_cm")
+            if vitals.get(k) is not None
+        ]
+        return bool(answered or declared)
+
+    if section_id == "conditions":
+        conditions = data.get("conditions") or []
+        if not conditions:
+            return True   # "I have none" is a complete answer
+        return all(
+            c.get("diagnosed_bucket") not in (None, "unknown")
+            and c.get("control") not in (None, "unsure")
+            for c in conditions
+        )
+
+    if section_id == "medications":
+        medications = data.get("medications") or []
+        if not medications:
+            return True
+        return all(m.get("started_bucket") not in (None, "unknown") for m in medications)
+
+    if section_id == "allergies":
+        # Nothing recorded is indistinguishable from never asked here, so this
+        # section only counts once the user has been through that step.
+        return bool(data.get("allergies")) or bool(profile.get("consent_accepted_at"))
+
+    if section_id == "family":
+        family = data.get("family_history") or []
+        if not family:
+            return True
+        return all((f.get("relation") or "").strip() for f in family)
+
+    if section_id == "lifestyle":
+        return all(profile.get(k) is not None
+                   for k in ("sleep_hours", "exercise_minutes_per_week", "diet_type"))
+
+    if section_id == "mental":
+        return all(profile.get(k) is not None
+                   for k in ("phq2_interest", "phq2_down", "gad2_nervous", "gad2_worry"))
+
+    if section_id == "screening":
+        return profile.get("screening_history") is not None
+
+    if section_id == "insurance":
+        return profile.get("insurance") is not None
+
+    return False
+
+
+def compute_completeness(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Profile completeness plus the single most valuable thing to add next."""
+    sections = []
+    earned = 0
+    total = 0
+    for section in PROFILE_SECTIONS:
+        done = _section_done(section["id"], data)
+        total += section["weight"]
+        if done:
+            earned += section["weight"]
+        sections.append({
+            "id": section["id"],
+            "label": section["label"],
+            "done": done,
+            "weight": section["weight"],
+        })
+
+    # Heaviest unfinished section wins, so the prompt is always the one that
+    # buys the most accuracy.
+    pending = [s for s in sections if not s["done"]]
+    pending.sort(key=lambda s: -s["weight"])
+    next_best = None
+    if pending:
+        copy = _NEXT_BEST_COPY.get(pending[0]["id"])
+        if copy:
+            next_best = {"section_id": pending[0]["id"], **copy}
+
+    return {
+        "percent": int(round(100.0 * earned / total)) if total else 0,
+        "sections": sections,
+        "next_best": next_best,
+    }
+
+
+async def _profile_bundle(user_id: int) -> Dict[str, Any]:
+    """Everything a screen needs about the current user, in one round trip."""
+    data = await profile_context.load_full_profile(user_id, fetch_one, fetch_all)
+    report = data.get("latest_report")
+    if report:
+        for key in ("components", "confidence", "subscores", "contributing_factors"):
+            report[key] = _parse_json_column(report.get(key))
+    return {
+        "profile": data.get("profile"),
+        "conditions": data.get("conditions"),
+        "medications": data.get("medications"),
+        "allergies": data.get("allergies"),
+        "vitals": data.get("vitals"),
+        "family_history": data.get("family_history"),
+        "latest_report": report,
+        "completeness": compute_completeness(data),
+    }
+
+
+@api_router.get("/profile/bundle")
+async def get_profile_bundle(username: str = Depends(verify_token)) -> Dict[str, Any]:
+    """The single source of truth for the client-side profile store."""
+    user = await fetch_one("SELECT id FROM users WHERE username=%s", (username,))
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return await _profile_bundle(int(user["id"]))
+
+
+class ProfileSectionPatch(BaseModel):
+    """One section of the profile, for progressive profiling.
+
+    Exactly one field is expected to be set, matching the section being
+    edited. Everything is optional so a screen only sends what it owns.
+    """
+    vitals: Optional[Vitals] = None
+    conditions: Optional[List[ConditionEntry]] = None
+    medications: Optional[List[MedicationEntry]] = None
+    allergies: Optional[List[AllergyEntry]] = None
+    family: Optional[List[FamilyEntry]] = None
+    lifestyle: Optional[Dict[str, Any]] = None
+    mental: Optional[MentalHealth] = None
+    womens_health: Optional[WomensHealth] = None
+    screening: Optional[ScreeningHistory] = None
+    insurance: Optional[Insurance] = None
+    goals: Optional[Goals] = None
+
+
+# Lifestyle keys a PATCH is allowed to set, so a typo cannot inject a column
+# name into the UPDATE below.
+_PATCHABLE_LIFESTYLE = frozenset({
+    "smoking", "alcohol", "exercise_frequency", "water_intake", "sleep_quality",
+    "stress_level", "cigarettes_per_day", "smoking_years", "smokeless_tobacco",
+    "alcohol_units_per_week", "exercise_minutes_per_week",
+    "sedentary_hours_per_day", "sleep_hours", "diet_type", "fruit_veg_servings",
+    "fried_food_per_week", "sugary_drinks_per_week", "cooking_fuel",
+})
+
+
+@api_router.patch("/profile/{section}")
+async def patch_profile_section(
+    section: str,
+    patch: ProfileSectionPatch,
+    username: str = Depends(verify_token),
+) -> Dict[str, Any]:
+    """Update one section and return the whole refreshed bundle.
+
+    Returning the bundle rather than an ack means the client never has to
+    guess what the new score is — it adopts the server's answer.
+    """
+    valid = {s["id"] for s in PROFILE_SECTIONS} | {"womens_health", "goals"}
+    if section not in valid:
+        raise HTTPException(status_code=404, detail=f"Unknown profile section: {section}")
+
+    user = await fetch_one("SELECT id FROM users WHERE username=%s", (username,))
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = int(user["id"])
+
+    if db_pool is None:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    now = to_dt(datetime.utcnow())
+
+    async with db_pool.acquire() as conn:
+        await conn.autocommit(False)
+        try:
+            async with conn.cursor() as cur:
+                # health_profiles may not exist yet for a user who has not
+                # finished onboarding; a PATCH must still work.
+                await cur.execute(
+                    """
+                    INSERT INTO health_profiles (user_id, created_at, updated_at)
+                    VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE updated_at=VALUES(updated_at)
+                    """,
+                    (user_id, now, now),
+                )
+
+                if patch.vitals is not None:
+                    await _insert_vitals(cur, user_id, patch.vitals, now)
+
+                if patch.conditions is not None:
+                    await cur.execute("DELETE FROM user_conditions WHERE user_id=%s", (user_id,))
+                    for entry in patch.conditions:
+                        await cur.execute(
+                            """
+                            INSERT INTO user_conditions
+                                (user_id, name, diagnosed_bucket, control, treatment,
+                                 severity, hospitalised_12m, created_at, updated_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            """,
+                            (user_id, entry.name, entry.diagnosed_bucket, entry.control,
+                             entry.treatment, entry.severity,
+                             1 if entry.hospitalised_12m else 0, now, now),
+                        )
+
+                if patch.medications is not None:
+                    await cur.execute("DELETE FROM user_medications WHERE user_id=%s", (user_id,))
+                    for med in patch.medications:
+                        await cur.execute(
+                            """
+                            INSERT INTO user_medications
+                                (user_id, name, dose, frequency, started_bucket,
+                                 for_condition, adherence, created_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            """,
+                            (user_id, med.name, med.dose, med.frequency,
+                             med.started_bucket, med.for_condition, med.adherence, now),
+                        )
+
+                if patch.allergies is not None:
+                    await cur.execute("DELETE FROM user_allergies WHERE user_id=%s", (user_id,))
+                    for allergy in patch.allergies:
+                        await cur.execute(
+                            """
+                            INSERT INTO user_allergies
+                                (user_id, allergen, category, reaction, created_at)
+                            VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            (user_id, allergy.allergen, allergy.category,
+                             allergy.reaction, now),
+                        )
+
+                if patch.family is not None:
+                    await cur.execute("DELETE FROM family_history WHERE user_id=%s", (user_id,))
+                    for entry in patch.family:
+                        for relation in (entry.relations or ['']):
+                            await cur.execute(
+                                """
+                                INSERT INTO family_history
+                                    (user_id, `condition`, relation, onset_bucket, created_at)
+                                VALUES (%s, %s, %s, %s, %s)
+                                """,
+                                (user_id, entry.condition, relation,
+                                 entry.onset_bucket, now),
+                            )
+
+                if patch.lifestyle:
+                    fields = {k: v for k, v in patch.lifestyle.items()
+                              if k in _PATCHABLE_LIFESTYLE}
+                    if fields:
+                        assignments = ", ".join(f"`{k}`=%s" for k in fields)
+                        await cur.execute(
+                            f"UPDATE health_profiles SET {assignments}, updated_at=%s "
+                            f"WHERE user_id=%s",
+                            tuple(fields.values()) + (now, user_id),
+                        )
+
+                if patch.mental is not None:
+                    await cur.execute(
+                        """
+                        UPDATE health_profiles SET phq2_interest=%s, phq2_down=%s,
+                               gad2_nervous=%s, gad2_worry=%s, updated_at=%s
+                        WHERE user_id=%s
+                        """,
+                        (patch.mental.phq2_interest, patch.mental.phq2_down,
+                         patch.mental.gad2_nervous, patch.mental.gad2_worry,
+                         now, user_id),
+                    )
+
+                for field, column in (
+                    ("womens_health", "womens_health"),
+                    ("screening", "screening_history"),
+                    ("insurance", "insurance"),
+                    ("goals", "goals"),
+                ):
+                    value = getattr(patch, field)
+                    if value is not None:
+                        await cur.execute(
+                            f"UPDATE health_profiles SET `{column}`=%s, updated_at=%s "
+                            f"WHERE user_id=%s",
+                            (_json_or_none(value), now, user_id),
+                        )
+
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            logger.exception("patch-profile: persistence failed")
+            raise HTTPException(status_code=500, detail="Failed to update profile")
+        finally:
+            try:
+                await conn.autocommit(True)
+            except Exception:
+                pass
+
+    return await _profile_bundle(user_id)
+
+
+@api_router.get("/health/catalog")
+async def get_health_catalog() -> Dict[str, Any]:
+    """Option catalogues for the onboarding and profile-edit screens.
+
+    Served from the backend so new options do not have to be hand-synced into
+    the frontend, the same way `GET /api/cities` already works.
+    """
+    return {
+        "conditions": sorted({
+            "Type 2 Diabetes", "Type 1 Diabetes", "Hypertension", "High Cholesterol",
+            "Heart Disease", "Chronic Kidney Disease", "Stroke", "Asthma", "COPD",
+            "Hypothyroidism", "Hyperthyroidism", "PCOS/PCOD", "Depression", "Anxiety",
+            "GERD/Acid Reflux", "Arthritis", "Migraine", "Anemia", "Cancer",
+        }),
+        "medications": sorted({
+            "Metformin", "Levothyroxine", "Atorvastatin", "Amlodipine", "Losartan",
+            "Telmisartan", "Omeprazole", "Pantoprazole", "Salbutamol Inhaler",
+            "Insulin", "Aspirin (Low-dose)", "Iron supplements", "Vitamin D",
+            "Vitamin B12", "Multivitamin", "Birth control pill",
+        }),
+        "allergies": sorted({
+            "Penicillin", "Sulfa drugs", "Aspirin/NSAIDs", "Pollen", "Dust mites",
+            "Peanuts", "Tree nuts", "Shellfish", "Eggs", "Dairy/Lactose", "Gluten",
+            "Latex", "Bee stings",
+        }),
+        "hereditary_conditions": sorted(HEREDITARY),
+        "relations": ["mother", "father", "sibling", "child", "grandparent", "other"],
+        "diagnosed_buckets": ["lt_1y", "1_5y", "5_10y", "gt_10y", "unknown"],
+        "control_levels": ["well", "partly", "poorly", "unsure"],
+        "treatments": ["none", "lifestyle", "medication", "both"],
+        "started_buckets": ["lt_1m", "1_6m", "6_12m", "1_5y", "gt_5y", "unknown"],
+        "onset_buckets": ["lt_50", "50_70", "gt_70", "unknown"],
+        "allergy_categories": ["drug", "food", "environmental", "other"],
+        "allergy_reactions": [
+            "mild_rash", "hives", "swelling", "breathing", "anaphylaxis", "unknown",
+        ],
+        # Reference ranges so the vitals screen can show what "normal" looks
+        # like next to each input.
+        "vital_ranges": {
+            "systolic_mmhg": {"min": 70, "max": 260, "normal": [90, 120], "unit": "mmHg"},
+            "diastolic_mmhg": {"min": 40, "max": 160, "normal": [60, 80], "unit": "mmHg"},
+            "fasting_glucose_mgdl": {"min": 40, "max": 500, "normal": [70, 99], "unit": "mg/dL"},
+            "hba1c_percent": {"min": 3.0, "max": 18.0, "normal": [4.0, 5.6], "unit": "%"},
+            "total_cholesterol_mgdl": {"min": 80, "max": 500, "normal": [125, 200], "unit": "mg/dL"},
+            "hdl_mgdl": {"min": 10, "max": 150, "normal": [40, 60], "unit": "mg/dL"},
+            "ldl_mgdl": {"min": 20, "max": 400, "normal": [20, 100], "unit": "mg/dL"},
+            "triglycerides_mgdl": {"min": 20, "max": 1000, "normal": [20, 150], "unit": "mg/dL"},
+            "resting_hr_bpm": {"min": 30, "max": 200, "normal": [60, 100], "unit": "bpm"},
+            "waist_cm": {"min": 40, "max": 200, "normal": [40, 90], "unit": "cm"},
+        },
+    }
 
 
 # ==================== AUTH ENDPOINTS ====================
@@ -1290,17 +2480,19 @@ async def send_chat_message(
 
     user_id = int(user["id"])
 
-    # Get user's health profile for context
-    profile = await fetch_one("SELECT * FROM health_profiles WHERE user_id=%s", (user_id,))
-    
-    # Build context
+    # Full structured profile, via the one shared builder. This previously
+    # sent four fields — persona, sleep, stress, exercise — two of which were
+    # hardcoded constants, so the assistant knew almost nothing true about the
+    # person it was advising.
+    profile_data = await profile_context.load_full_profile(user_id, fetch_one, fetch_all)
+    profile = profile_data.get("profile")
+
     context = "You are a helpful health assistant."
-    if profile:
-        context += f"\n\nUser's Health Profile:\n"
-        context += f"- Persona: {profile.get('health_persona', 'N/A')}\n"
-        context += f"- Sleep: {profile.get('sleep_pattern')} ({profile.get('sleep_hours')}h)\n"
-        context += f"- Stress: {profile.get('stress_level')}\n"
-        context += f"- Exercise: {profile.get('exercise_frequency')}\n"
+    rendered = profile_context.render_profile_for_ai(profile_data, purpose="chat")
+    if rendered:
+        context += "\n\nUser's Health Profile:\n" + rendered + "\n"
+    if profile and profile.get("health_persona"):
+        context += f"\nPersona: {profile['health_persona']}\n"
 
     # Include recent prescriptions in chat context
     try:
@@ -1551,20 +2743,30 @@ async def analyze_prescription_with_ai(
     extracted_text: str,
     user_health_profile: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Analyze prescription using AI based on extracted text and user's health data."""
-    
+    """Analyze a prescription against the user's real allergies and medications.
+
+    `user_health_profile` is the bundle from
+    `profile_context.load_full_profile`. It used to be a single
+    `health_profiles` row carrying sleep, stress, exercise and diet — no
+    allergies and no medication list — so the "interactions" field below was
+    being generated with nothing to check against.
+    """
+
     context = f"Prescription Text Extracted (OCR):\n{extracted_text}\n\n"
     context += "IMPORTANT: Use the medication names EXACTLY as extracted above - they are correct.\n\n"
-    
+
     if user_health_profile:
-        context += "User's Health Profile:\n"
-        context += f"- Sleep: {user_health_profile.get('sleep_pattern')} ({user_health_profile.get('sleep_hours')}h)\n"
-        context += f"- Stress Level: {user_health_profile.get('stress_level')}\n"
-        context += f"- Exercise: {user_health_profile.get('exercise_frequency')}\n"
-        context += f"- Diet: {user_health_profile.get('diet_type')}\n"
-        if user_health_profile.get('existing_conditions'):
-            context += f"- Existing Conditions: {user_health_profile.get('existing_conditions')}\n"
-    
+        context += profile_context.render_profile_for_ai(
+            user_health_profile, purpose="prescription"
+        )
+        context += (
+            "\n\nBefore anything else: compare every drug above against the "
+            "KNOWN ALLERGIES and CURRENT MEDICATIONS lists. Report any allergy "
+            "match or drug interaction explicitly. If a list is empty, say it "
+            "is not recorded rather than implying there is nothing to worry "
+            "about.\n\n"
+        )
+
     prompt = f"""{context}
 
 Analyze the prescription text above. For EACH medication found:
@@ -1698,13 +2900,27 @@ async def upload_prescription(
                 detail="Could not extract sufficient text from image. Please ensure the image is clear and readable."
             )
         
-        profile = await fetch_one("SELECT * FROM health_profiles WHERE user_id=%s", (user_id,))
-        
+        # The full bundle, so the analyzer can actually check the prescription
+        # against this user's allergies and current medications.
+        profile_data = await profile_context.load_full_profile(user_id, fetch_one, fetch_all)
+
         analysis = await analyze_prescription_with_ai(
             extracted_text=extracted_text,
-            user_health_profile=dict(profile) if profile else None,
+            user_health_profile=profile_data,
         )
-        
+
+        # Deterministic backstop, run regardless of what the model returned.
+        # Name matching is crude and will miss cross-reactivity, so it only
+        # ever adds warnings — it never clears one.
+        conflicts = profile_context.allergy_conflicts(
+            profile_data.get("allergies") or [],
+            [analysis.get("medication_name") or "", extracted_text],
+        )
+        if conflicts:
+            existing = analysis.get("interactions") or ""
+            warning = "ALLERGY WARNING: " + "; ".join(conflicts)
+            analysis["interactions"] = (warning + "\n\n" + existing).strip()
+
         created_at = to_dt(datetime.utcnow())
         
         def to_string(val):
@@ -2186,6 +3402,10 @@ async def generate_health_report(
             ai_summary=ai_summary,
             prescriptions=prescriptions,
             prescription_ai_summary=prescription_ai_summary,
+            # Conditions, medications, allergies, vitals, family history and
+            # the risk assessment — the parts that make this a handoff a
+            # doctor can act on rather than a lifestyle summary.
+            clinical=await profile_context.load_full_profile(user_id, fetch_one, fetch_all),
         )
         
         return StreamingResponse(

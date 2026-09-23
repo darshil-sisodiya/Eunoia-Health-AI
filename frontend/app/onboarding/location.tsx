@@ -8,10 +8,9 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
 
 import OnboardingShell from '../../components/onboarding/OnboardingShell';
-import { useOnboarding } from '../../contexts/OnboardingContext';
+import { useOnboardingStep } from '../../utils/useOnboardingStep';
 import {
   KARNATAKA_CITIES_FALLBACK,
   ONBOARDING_COPY,
@@ -53,8 +52,11 @@ export default function Location() {
     cities,
     setCities,
     setLocation,
-    markStep,
-  } = useOnboarding();
+    step,
+    totalSteps,
+    goNext,
+    goBack,
+  } = useOnboardingStep('location');
 
   // True iff the modal subtree threw during render. While true the city
   // field is replaced by the "City picker unavailable" placeholder and
@@ -126,9 +128,7 @@ export default function Location() {
   };
 
   const handleBack = () => {
-    if (router.canGoBack()) {
-      router.back();
-    }
+    goBack();
   };
 
   const handleAdvance = () => {
@@ -136,19 +136,15 @@ export default function Location() {
       setShowAdvanceError(true);
       return;
     }
-    markStep(7);
-    // The `/onboarding/analyzing` route is created by task 10.14; until
-    // that file exists, expo-router's typed-routes generator does not
-    // list it. Casting through `any` keeps this screen self-contained
-    // without coupling its compilation to subsequent tasks.
-    router.push('/onboarding/analyzing' as any);
+    goNext();
   };
 
   // ── Render ───────────────────────────────────────────────────
 
   return (
     <OnboardingShell
-      step={6}
+      step={step}
+      totalSteps={totalSteps}
       eyebrow={ONBOARDING_COPY.location.eyebrow}
       canAdvance={canAdvance}
       onBack={handleBack}

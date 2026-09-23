@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -8,58 +8,58 @@ import {
   Alert,
   ActivityIndicator,
   Linking,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../contexts/AuthContext';
 import { useRouter } from 'expo-router';
-import axios from 'axios';
 import { API_BASE_URL } from '../../utils/api';
 import { MarkdownText } from '../../components/MarkdownText';
 import { colors, spacing, shadows, typography } from '../../constants/theme';
+import { useHealthProfile } from '../../contexts/HealthProfileContext';
+import CompletenessCard from '../../components/health/CompletenessCard';
+import ClinicalList, {
+  CONTROL_LABELS,
+  DURATION_LABELS,
+} from '../../components/health/ClinicalList';
 
-interface HealthProfile {
-  sleep_pattern: string;
-  sleep_hours: number;
-  hydration_level: string;
-  stress_level: string;
-  exercise_frequency: string;
-  diet_type: string;
-  health_persona?: string;
-}
-
-const HEALTH_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
-  sleep_pattern: 'moon-outline',
-  sleep_hours: 'time-outline',
-  hydration_level: 'water-outline',
-  stress_level: 'pulse-outline',
-  exercise_frequency: 'fitness-outline',
-  diet_type: 'restaurant-outline',
-};
+// Fields worth surfacing, in the order a person would look for them. The
+// screen previously showed six legacy lifestyle fields read from the old
+// profile endpoint, two of which the backend filled with hardcoded constants
+// because onboarding never asked for them.
+const PROFILE_FIELDS: {
+  key: string;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  unit?: string;
+}[] = [
+  { key: 'age', label: 'Age', icon: 'person-outline' },
+  { key: 'gender', label: 'Gender', icon: 'body-outline' },
+  { key: 'height', label: 'Height', icon: 'resize-outline', unit: 'cm' },
+  { key: 'weight', label: 'Weight', icon: 'barbell-outline', unit: 'kg' },
+  { key: 'smoking', label: 'Smoking', icon: 'flame-outline' },
+  { key: 'alcohol', label: 'Alcohol', icon: 'wine-outline' },
+  { key: 'exercise_frequency', label: 'Exercise', icon: 'fitness-outline' },
+  { key: 'sleep_hours', label: 'Sleep', icon: 'moon-outline', unit: 'h' },
+  { key: 'stress_level', label: 'Stress', icon: 'pulse-outline' },
+  { key: 'diet_type', label: 'Diet', icon: 'restaurant-outline' },
+];
 
 export default function Profile() {
   const { username, logout, token } = useAuth();
   const router = useRouter();
-  const [profile, setProfile] = useState<HealthProfile | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  // Read from the shared store rather than re-fetching a screen-specific
+  // slice. This screen used to call the legacy profile endpoint, which is why
+  // it showed none of the data collected during onboarding.
+  const { data, status, refresh } = useHealthProfile();
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
 
-  useEffect(() => {
-    loadProfile();
-  }, []);
-
-  const loadProfile = async () => {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/api/health/profile`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      setProfile(response.data);
-    } catch (error) {
-      console.error('Error loading profile:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const profile = data?.profile ?? null;
+  const conditions = data?.conditions ?? [];
+  const medications = data?.medications ?? [];
+  const allergies = data?.allergies ?? [];
+  const isLoading = status === 'loading' && !data;
 
   const handleGenerateReport = async () => {
     setIsGeneratingReport(true);
@@ -102,13 +102,12 @@ export default function Profile() {
     router.push('/onboarding/welcome');
   };
 
-  const formatLabel = (key: string, value: string | number): string => {
-    if (typeof value === 'number') return `${value} hours`;
-    return value.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
-  };
-
-  const formatKeyLabel = (key: string): string => {
-    return key.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+  // Units are declared per field now, so this only has to make a stored value
+  // readable - it must not invent one (it used to append "hours" to every
+  // number it was given, including height and weight).
+  const formatLabel = (key: string, value: unknown): string => {
+    if (typeof value === 'number') return String(value);
+    return String(value).replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
   };
 
   if (isLoading) {
@@ -121,7 +120,17 @@ export default function Profile() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={status === 'loading' && Boolean(data)}
+            onRefresh={refresh}
+            tintColor={colors.textTertiary}
+          />
+        }
+      >
         {/* ── INK HERO HEADER ─────────────────────────────── */}
         <View style={styles.headerCard}>
           <View style={styles.heroAccentGlow} pointerEvents="none" />
@@ -146,6 +155,8 @@ export default function Profile() {
             </View>
           </View>
         </View>
+
+        <CompletenessCard completeness={data?.completeness} hideWhenComplete={false} />
 
         {/* ── PERSONA ──────────────────────────────────────── */}
         {profile?.health_persona && (
@@ -177,21 +188,67 @@ export default function Profile() {
             </View>
 
             <View style={styles.infoGrid}>
-              {(['sleep_pattern', 'sleep_hours', 'hydration_level', 'stress_level', 'exercise_frequency', 'diet_type'] as const).map((key) => {
-                const iconName = HEALTH_ICONS[key];
-                const value = profile[key];
-                if (value === undefined) return null;
+              {PROFILE_FIELDS.map((field) => {
+                const value = (profile as Record<string, unknown>)[field.key];
+                if (value === undefined || value === null || value === '') return null;
                 return (
-                  <View key={key} style={styles.infoCard}>
+                  <View key={field.key} style={styles.infoCard}>
                     <View style={styles.infoIconBg}>
-                      <Ionicons name={iconName} size={16} color={colors.textPrimary} />
+                      <Ionicons name={field.icon} size={16} color={colors.textPrimary} />
                     </View>
-                    <Text style={styles.infoLabel}>{formatKeyLabel(key)}</Text>
-                    <Text style={styles.infoValue}>{formatLabel(key, value)}</Text>
+                    <Text style={styles.infoLabel}>{field.label}</Text>
+                    <Text style={styles.infoValue}>
+                      {formatLabel(field.key, value)}
+                      {field.unit ? ` ${field.unit}` : ''}
+                    </Text>
                   </View>
                 );
               })}
             </View>
+
+            {/* The clinical record. None of this was visible before, because
+                the medical history only ever reached a JSON snapshot column. */}
+            <ClinicalList
+              title="Conditions"
+              empty="None recorded"
+              items={conditions.map((c) => ({
+                key: c.name,
+                primary: c.name,
+                secondary: [
+                  DURATION_LABELS[String(c.diagnosed_bucket)] ?? 'duration unknown',
+                  CONTROL_LABELS[String(c.control)] ?? 'control unknown',
+                ].join(' · '),
+              }))}
+              onEdit={() => router.push('/profile/edit/conditions' as never)}
+            />
+
+            <ClinicalList
+              title="Medications"
+              empty="None recorded"
+              items={medications.map((m) => ({
+                key: m.name,
+                primary: m.name,
+                secondary: [m.dose, m.for_condition ? `for ${m.for_condition}` : null]
+                  .filter(Boolean)
+                  .join(' · '),
+              }))}
+              onEdit={() => router.push('/profile/edit/medications' as never)}
+            />
+
+            <ClinicalList
+              title="Allergies"
+              empty="None recorded"
+              items={allergies.map((a) => ({
+                key: a.allergen,
+                primary: a.allergen,
+                secondary: a.reaction ? String(a.reaction).replace(/_/g, ' ') : '',
+                warn:
+                  a.reaction === 'anaphylaxis' ||
+                  a.reaction === 'breathing' ||
+                  a.reaction === 'swelling',
+              }))}
+              onEdit={() => router.push('/profile/edit/allergies' as never)}
+            />
           </View>
         )}
 

@@ -3,6 +3,7 @@ import { Stack, router } from 'expo-router';
 
 import { colors } from '../../constants/theme';
 import { useAuth } from '../../contexts/AuthContext';
+import { resumeTarget, routeForStepId } from '../../utils/onboardingFlow';
 import {
   OnboardingProvider,
   useOnboarding,
@@ -36,23 +37,14 @@ import {
  * backward.
  */
 
-// Map the OnboardingContext `currentStep` (1..7) onto the matching
-// expo-router path. Step 1 routes to welcome, which is the canonical
-// "fresh draft" landing page, so any unexpected `currentStep` value
-// resolves to welcome via the `??` fallback below.
-const STEP_TO_ROUTE: Record<number, string> = {
-  1: '/onboarding/welcome',
-  2: '/onboarding/basic',
-  3: '/onboarding/lifestyle',
-  4: '/onboarding/medical',
-  5: '/onboarding/family',
-  6: '/onboarding/location',
-  7: '/onboarding/analyzing',
-};
+// Routing is derived from the step graph in `constants/onboardingSteps.ts`,
+// not from a fixed number->path table. The old table could not express a flow
+// whose steps depend on the answers, and any inserted step silently shifted
+// every later index.
 
 function OnboardingGuard({ children }: { children: React.ReactNode }) {
   const { token, isLoading: authLoading } = useAuth();
-  const { hydrated, currentStep } = useOnboarding();
+  const { hydrated, currentStepId, draft } = useOnboarding();
   // Ensures the auto-resume effect replaces into the restored step
   // exactly once per provider mount. Without this, every dependency
   // change in the effect would re-replace and fight any subsequent
@@ -86,12 +78,16 @@ function OnboardingGuard({ children }: { children: React.ReactNode }) {
     if (hasRoutedRef.current) return;
     hasRoutedRef.current = true;
 
-    const target = STEP_TO_ROUTE[currentStep] ?? '/onboarding/welcome';
+    // `resumeTarget` handles the case a fixed table could not: the stored
+    // step may no longer apply to this draft (gender changed, last condition
+    // removed), and routing to a step that is no longer in the flow strands
+    // the user with no way forward.
+    const target = routeForStepId(resumeTarget(draft, currentStepId));
     // `router.replace` is a no-op when the active route already
     // matches the target, so re-entering /onboarding/welcome on a
     // fresh draft does not produce a visible navigation glitch.
     router.replace(target as never);
-  }, [authLoading, token, hydrated, currentStep]);
+  }, [authLoading, token, hydrated, currentStepId, draft]);
 
   return <>{children}</>;
 }

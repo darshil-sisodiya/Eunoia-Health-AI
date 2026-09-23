@@ -5,15 +5,12 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { router } from 'expo-router';
 
 import OnboardingShell from '../../components/onboarding/OnboardingShell';
 import ChoiceCard from '../../components/onboarding/ChoiceCard';
 import KeyboardAwareScreenScrollView from '../../components/KeyboardAwareScreenScrollView';
-import {
-  useOnboarding,
-  type BasicProfile,
-} from '../../contexts/OnboardingContext';
+import { type BasicProfile } from '../../contexts/OnboardingContext';
+import { useOnboardingStep } from '../../utils/useOnboardingStep';
 import { ONBOARDING_COPY } from '../../constants/onboarding';
 import { colors, spacing, typography } from '../../constants/theme';
 import type { Gender } from '../../utils/onboardingApi';
@@ -162,7 +159,8 @@ export function validateBasic(input: BasicInput): ValidationResult {
 
 // ── Screen ────────────────────────────────────────────────────────
 export default function Basic() {
-  const { draft, hydrated, setBasic, markStep } = useOnboarding();
+  const { draft, hydrated, setBasic, step, totalSteps, goNext, goBack } =
+    useOnboardingStep('basic');
 
   const [input, setInput] = useState<BasicInput>({
     fullName: '',
@@ -255,27 +253,21 @@ export default function Basic() {
       return;
     }
     setBasic(result.parsed);
-    markStep(3);
-    // The `/onboarding/lifestyle` route is created by task 10.4. Until
-    // that file lands, expo-router's typed-route generator does not
-    // list it, so we cast through `any` to keep this screen
-    // self-contained.
-    router.push('/onboarding/lifestyle' as any);
+    // Where "next" is depends on the draft (gender decides whether the
+    // women's-health step applies), so the step graph decides, not this screen.
+    goNext();
   };
 
   const handleBack = () => {
-    if (router.canGoBack()) {
-      router.back();
-    } else {
-      router.replace('/onboarding/welcome' as any);
-    }
+    goBack();
   };
 
   const C = ONBOARDING_COPY.basic;
 
   return (
     <OnboardingShell
-      step={2}
+      step={step}
+      totalSteps={totalSteps}
       eyebrow={C.eyebrow}
       canAdvance={validation.ok}
       onBack={handleBack}

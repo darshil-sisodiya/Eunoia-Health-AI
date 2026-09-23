@@ -22,6 +22,7 @@ import {
   type SaveReportRequest,
 } from '../../utils/onboardingApi';
 import { clearDraft } from '../../utils/onboardingDraft';
+import { buildAnalyzePayload } from '../../utils/onboardingPayload';
 
 /**
  * Result Screen — final step of the Eunoia onboarding flow.
@@ -105,20 +106,11 @@ export default function Result() {
           contributing_factors: response.contributing_factors,
           insights: response.insights,
           ai_insights_unavailable: response.ai_insights_unavailable,
-          // Best-effort snapshot reconstructed from the in-memory
-          // draft. The Result Screen does not receive the original
-          // `AnalyzeRiskRequest` directly; the analyzing screen built
-          // it from the same draft slices, so this mirrors that
-          // payload as closely as the type system allows. The
-          // backend stores it as JSON, so any partial slice still
-          // round-trips safely.
-          payload_snapshot: {
-            basic: draft.basic,
-            lifestyle: draft.lifestyle,
-            medical: draft.medical,
-            family_history: { conditions: draft.family_history },
-            location: draft.location,
-          } as SaveReportRequest['payload_snapshot'],
+          // Rebuilt with the same helper the analyzing screen used, so the
+          // snapshot cannot drift from the body that was actually scored.
+          // This matters more than it used to: the backend now recomputes the
+          // score from this snapshot rather than trusting the numbers above.
+          payload_snapshot: buildAnalyzePayload(draft),
         };
         await saveReport(saveBody, token ?? '');
       }
@@ -140,11 +132,7 @@ export default function Result() {
       setSavePending(false);
     }
   }, [
-    draft.basic,
-    draft.family_history,
-    draft.lifestyle,
-    draft.location,
-    draft.medical,
+    draft,
     reset,
     response,
     savePending,

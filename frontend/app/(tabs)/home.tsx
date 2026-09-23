@@ -18,9 +18,16 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../contexts/AuthContext';
 import axios from 'axios';
 import { API_BASE_URL } from '../../utils/api';
-import { getReports, type AnalyzeRiskResponse } from '../../utils/onboardingApi';
+import { type AnalyzeRiskResponse } from '../../utils/onboardingApi';
 import { useRouter } from 'expo-router';
 import { colors, spacing, shadows, typography } from '../../constants/theme';
+import { componentBars } from '../../utils/riskView';
+import {
+  ConfidencePill,
+  toneColors,
+} from '../../components/health/RiskBreakdown';
+import CompletenessCard from '../../components/health/CompletenessCard';
+import { useHealthProfile } from '../../contexts/HealthProfileContext';
 import Svg, { Circle } from 'react-native-svg';
 import { Pedometer } from 'expo-sensors';
 import * as Linking from 'expo-linking';
@@ -334,13 +341,11 @@ function RiskScoreCard({
   const score = hasReport ? report!.wellness_score : null;
   const riskLevel = hasReport ? report!.risk_level : null;
 
-  // Map risk level → semantic accent + soft surface (existing tokens only).
-  const riskTone =
-    riskLevel === 'High'
-      ? { fg: colors.error, bg: colors.errorSoft }
-      : riskLevel === 'Moderate'
-      ? { fg: colors.warning, bg: colors.warningSoft }
-      : { fg: colors.accent, bg: colors.accentMuted };
+  // Resolved from one shared mapping. The inline ternary this replaces fell
+  // through to its `else` for any level it did not name, so the new
+  // 'Very High' level would have rendered in the calm accent tone - visually
+  // identical to 'Low'.
+  const tone = toneColors(riskLevel);
 
   return (
     <View style={riskCardStyles.section}>
@@ -379,30 +384,37 @@ function RiskScoreCard({
                 style={[
                   riskCardStyles.riskSummary,
                   {
-                    backgroundColor: riskTone.bg,
-                    borderLeftColor: riskTone.fg,
+                    backgroundColor: tone.bg,
+                    borderLeftColor: tone.fg,
                   },
                 ]}
               >
                 <Text style={riskCardStyles.riskSummaryLabel}>RISK LEVEL</Text>
-                <Text style={[riskCardStyles.riskSummaryValue, { color: riskTone.fg }]}>
+                <Text style={[riskCardStyles.riskSummaryValue, { color: tone.fg }]}>
                   {riskLevel}
                 </Text>
+              </View>
+              {/* How much of the picture this is based on. Without it a score
+                  built on three answers looks as solid as one built on twenty. */}
+              <View style={riskCardStyles.confidenceWrap}>
+                <ConfidencePill report={report} />
               </View>
             </View>
 
             <View style={riskCardStyles.cardRight}>
               <View style={riskCardStyles.miniBars}>
-                {aggregateByComponent(report!.contributing_factors).map((row) => (
-                  <View key={row.component} style={riskCardStyles.miniBarRow}>
+                {componentBars(report).slice(0, 4).map((row) => (
+                  <View key={row.id} style={riskCardStyles.miniBarRow}>
                     <Text style={riskCardStyles.miniBarLabel} numberOfLines={1}>
-                      {row.component}
+                      {row.label}
                     </Text>
                     <View style={riskCardStyles.miniBarTrack}>
                       <View
                         style={[
                           riskCardStyles.miniBarFill,
-                          { width: `${Math.max(row.intensity * 100, 6)}%` },
+                          // Against this component's own cap, so a bar is only
+                          // full when the component actually is.
+                          { width: `${Math.max(row.fraction * 100, 4)}%` },
                         ]}
                       />
                     </View>
@@ -441,33 +453,11 @@ function formatShortDate(iso: string | undefined): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-// Bucket contributing factors by their component so the dashboard mini-bars
-// show one row per bucket (cardiovascular / metabolic / wellness / hereditary)
-// rather than repeating the same component label when multiple `dimension`s
-// share a bucket. Magnitudes are summed within a bucket and the largest
-// bucket scales to 100%; everything else is relative to it. Buckets with a
-// total of zero are dropped so empty rows don't render.
-function aggregateByComponent(
-  factors: AnalyzeRiskResponse['contributing_factors'],
-): { component: string; intensity: number }[] {
-  const totals = new Map<string, number>();
-  for (const f of factors) {
-    if (!f || typeof f.component !== 'string') continue;
-    const prev = totals.get(f.component) ?? 0;
-    totals.set(f.component, prev + Math.abs(Number(f.delta) || 0));
-  }
-  const rows = Array.from(totals.entries())
-    .filter(([, total]) => total > 0)
-    .map(([component, total]) => ({ component, total }))
-    .sort((a, b) => b.total - a.total)
-    .slice(0, 4);
-  if (rows.length === 0) return [];
-  const max = rows[0].total || 1;
-  return rows.map((r) => ({
-    component: r.component,
-    intensity: Math.min(r.total / max, 1),
-  }));
-}
+// `aggregateByComponent` lived here. It summed raw factor deltas and scaled
+// them against the user's own largest bucket, which meant everybody's worst
+// component rendered as a full bar - a Low-risk user looked maxed out.
+// `componentBars` in utils/riskView.ts draws against each component's
+// published cap instead, which is why the API now returns those caps.
 
 // ═══════════════════════════════════════════════════════════════
 // ─── Home Screen ────────────────────────────────────────────────
@@ -489,7 +479,10 @@ export default function Home() {
   const [totalMeditationMin, setTotalMeditationMin] = useState(0);
   const [showMeditation, setShowMeditation] = useState(false);
 
-  const [latestReport, setLatestReport] = useState<AnalyzeRiskResponse | null>(null);
+  // Sourced from the shared store rather than a screen-local fetch, so a
+  // profile edit made anywhere updates the score shown here.
+  const { data: profileData, refresh: refreshProfile } = useHealthProfile();
+  const latestReport = profileData?.latest_report ?? null;
 
   const [isPedometerAvailable, setIsPedometerAvailable] = useState(false);
   const pedometerSub = useRef<any>(null);
@@ -569,12 +562,15 @@ export default function Home() {
       setRefreshing(true);
       try {
         const headers = { Authorization: `Bearer ${token}` };
-        const [weekRes, analysisRes, medRes, reportsResult] = await Promise.all([
+        // Steps and meditation stay local: they are activity data, not
+        // profile. The risk report comes from the shared store so every
+        // screen shows the same one.
+        const [weekRes, analysisRes, medRes] = await Promise.all([
           axios.get(`${BACKEND_URL}/api/steps/week`, { headers }).catch(() => null),
           axios.get(`${BACKEND_URL}/api/steps/analysis`, { headers }).catch(() => null),
           axios.get(`${BACKEND_URL}/api/meditation/week`, { headers }).catch(() => null),
-          getReports(token ?? '').catch(() => null),
         ]);
+        void refreshProfile();
 
         if (weekRes?.data) {
           const mapped = mapWeekToSunSat(weekRes.data.days);
@@ -598,11 +594,6 @@ export default function Home() {
           setMeditationWeek(mappedMed);
           setTotalMeditationMin(medRes.data.total_minutes);
         }
-        if (Array.isArray(reportsResult) && reportsResult.length > 0) {
-          setLatestReport(reportsResult[0]);
-        } else if (Array.isArray(reportsResult)) {
-          setLatestReport(null);
-        }
       } catch (e) {
         console.error('Error loading home data', e);
       } finally {
@@ -610,7 +601,7 @@ export default function Home() {
         setRefreshing(false);
       }
     },
-    [token, isPedometerAvailable]
+    [token, isPedometerAvailable, refreshProfile]
   );
 
   useEffect(() => {
@@ -787,6 +778,14 @@ export default function Home() {
           <Ionicons name="arrow-forward" size={16} color={colors.textTertiary} />
         </TouchableOpacity>
 
+        {/* ── PROFILE COMPLETENESS ──────────────────────────── */}
+        {/* Where the rest of the profile gets asked for: one item at a time,
+            ordered by how much it would actually improve the assessment.
+            Hides itself once there is nothing worth asking. */}
+        <View style={styles.completenessWrap}>
+          <CompletenessCard completeness={profileData?.completeness} />
+        </View>
+
         {/* ── RISK SCORE ────────────────────────────────────── */}
         <RiskScoreCard
           report={latestReport}
@@ -899,6 +898,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  completenessWrap: {
+    paddingHorizontal: spacing.screenPadding,
+    marginTop: spacing.xxl,
+  },
+
   scrollContent: {
     paddingBottom: 140,
   },
@@ -1542,6 +1546,10 @@ const riskCardStyles = StyleSheet.create({
   riskSummaryValue: {
     ...typography.headline,
     marginTop: 1,
+  },
+
+  confidenceWrap: {
+    marginTop: spacing.sm,
   },
 
   miniBars: {

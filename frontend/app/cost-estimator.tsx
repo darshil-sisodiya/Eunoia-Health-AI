@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import KeyboardAwareScreenScrollView from '../components/KeyboardAwareScreenScrollView';
 import { colors, shadows, spacing, typography } from '../constants/theme';
 import { useAuth } from '../contexts/AuthContext';
+import { useHealthProfile } from '../contexts/HealthProfileContext';
 import {
   createCostEstimate,
   formatINR,
@@ -84,6 +85,9 @@ export default function CostEstimatorScreen() {
   const [city, setCity] = useState('');
   const [severity, setSeverity] = useState<'Mild' | 'Moderate' | 'Severe'>('Moderate');
   const [tier, setTier] = useState<'Low' | 'Medium' | 'High' | null>(null);
+  // Suggested, never forced. Someone with no cover and a small budget should
+  // not have to work out which tier they can afford - but they can override.
+  const [tierSuggested, setTierSuggested] = useState(false);
   const [consultation, setConsultation] = useState<
     'General' | 'Specialist' | 'Follow_up' | 'Tele'
   >('Specialist');
@@ -92,6 +96,14 @@ export default function CostEstimatorScreen() {
   const [estimate, setEstimate] = useState<CostEstimateResponse | null>(null);
   const [estimating, setEstimating] = useState(false);
   const [estimateError, setEstimateError] = useState<string | null>(null);
+
+  // The user's own conditions, offered as one-tap shortcuts instead of
+  // making them retype something the app already knows.
+  const { data: healthProfile } = useHealthProfile();
+  const profileConditions = useMemo(
+    () => (healthProfile?.conditions ?? []).map((c) => c.name).slice(0, 6),
+    [healthProfile],
+  );
 
   // Result fade-in.
   const resultOpacity = useRef(new Animated.Value(0)).current;
@@ -118,6 +130,33 @@ export default function CostEstimatorScreen() {
       cancelled = true;
     };
   }, [token]);
+
+  // Default the hospital tier from the user's cover and budget once, leaving
+  // any explicit choice alone.
+  useEffect(() => {
+    if (tier !== null || tierSuggested) return;
+    const insurance = healthProfile?.profile?.insurance as
+      | { sum_insured_band?: string | null; out_of_pocket_band?: string | null }
+      | null
+      | undefined;
+    if (!insurance) return;
+
+    const cover = insurance.sum_insured_band;
+    const pocket = insurance.out_of_pocket_band;
+    const suggestion =
+      cover === 'gt_25l' || cover === '10_25l' || pocket === 'gt_1l'
+        ? 'High'
+        : cover === '5_10l' || pocket === '25_1l'
+          ? 'Medium'
+          : cover || pocket
+            ? 'Low'
+            : null;
+
+    if (suggestion) {
+      setTier(suggestion as 'Low' | 'Medium' | 'High');
+      setTierSuggested(true);
+    }
+  }, [healthProfile, tier, tierSuggested]);
 
   useEffect(() => {
     if (estimate) {
@@ -258,6 +297,24 @@ export default function CostEstimatorScreen() {
                 returnKeyType="default"
                 accessibilityLabel="Condition description"
               />
+              {profileConditions.length > 0 ? (
+                <View style={styles.profileConditionRow}>
+                  <Text style={styles.profileConditionLabel}>From your profile</Text>
+                  <View style={styles.profileConditionChips}>
+                    {profileConditions.map((name) => (
+                      <TouchableOpacity
+                        key={name}
+                        style={styles.profileConditionChip}
+                        onPress={() => setConditionText(name)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Estimate for ${name}`}
+                      >
+                        <Text style={styles.profileConditionChipText}>{name}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
               <Text style={styles.conditionHint}>
                 Type any health concern. We map it to a relevant specialization.
               </Text>
@@ -1036,6 +1093,33 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     padding: 0,
   },
+  profileConditionRow: {
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  profileConditionLabel: {
+    ...typography.overline,
+    color: colors.textTertiary,
+    marginBottom: spacing.sm,
+  },
+  profileConditionChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  profileConditionChip: {
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    borderRadius: spacing.chipRadius,
+    borderWidth: 1,
+    borderColor: colors.surfaceBorder,
+    backgroundColor: colors.backgroundSecondary,
+  },
+  profileConditionChipText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+  },
+
   conditionHint: {
     ...typography.caption,
     color: colors.textTertiary,

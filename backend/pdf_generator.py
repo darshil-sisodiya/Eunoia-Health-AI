@@ -51,23 +51,40 @@ class NumberedCanvas(canvas.Canvas):
         )
 
 
+def _bmi(height_cm: Any, weight_kg: Any) -> Optional[float]:
+    """BMI, or None when either input is missing or unusable."""
+    try:
+        h = float(height_cm)
+        w = float(weight_kg)
+    except (TypeError, ValueError):
+        return None
+    if h <= 0:
+        return None
+    return w / ((h / 100.0) ** 2)
+
+
 def create_health_report_pdf(
     username: str,
     profile_data: Dict[str, Any],
     ai_summary: str,
     prescriptions: Optional[List[Dict[str, Any]]] = None,
     prescription_ai_summary: Optional[str] = None,
+    clinical: Optional[Dict[str, Any]] = None,
 ) -> BytesIO:
     """
     Generate a comprehensive health report PDF.
-    
+
     Args:
         username: Patient username
         profile_data: Health profile information
         ai_summary: AI-generated summary from Gemini
         prescriptions: Optional list of prescription data
         prescription_ai_summary: Optional AI summary of prescriptions
-        
+        clinical: Optional bundle from `profile_context.load_full_profile`,
+            supplying the conditions, medications, allergies, vitals, family
+            history and risk assessment. Without it the report is a lifestyle
+            summary rather than something a doctor can act on.
+
     Returns:
         BytesIO: PDF file buffer
     """
@@ -167,23 +184,44 @@ def create_health_report_pdf(
     story.append(Paragraph("Health Profile", heading_style))
     
     profile_items = []
+    # This table used to render six lifestyle fields, two of which were
+    # hardcoded constants, which made it close to useless as a doctor handoff.
+    # The caller already passes the whole health_profiles row, so the fix is
+    # simply to name the columns that matter clinically.
     profile_labels = {
+        'age': 'Age',
+        'gender': 'Gender',
+        'height': 'Height (cm)',
+        'weight': 'Weight (kg)',
+        'blood_group': 'Blood Group',
+        'smoking': 'Smoking',
+        'smokeless_tobacco': 'Smokeless Tobacco',
+        'alcohol': 'Alcohol',
+        'exercise_frequency': 'Exercise Frequency',
+        'exercise_minutes_per_week': 'Exercise (min/week)',
         'sleep_pattern': 'Sleep Pattern',
         'sleep_hours': 'Sleep Hours',
-        'hydration_level': 'Hydration Level',
         'stress_level': 'Stress Level',
-        'exercise_frequency': 'Exercise Frequency',
-        'diet_type': 'Diet Type'
+        'diet_type': 'Diet Type',
+        'hydration_level': 'Hydration Level',
     }
-    
+
     for key, label in profile_labels.items():
-        value = profile_data.get(key, 'N/A')
-        if isinstance(value, str):
+        value = profile_data.get(key)
+        # Distinguish "not recorded" from a real answer. Printing 'N/A' for a
+        # value we never asked for is the honest rendering; inventing one is not.
+        if value is None or value == '':
+            value = 'Not recorded'
+        elif isinstance(value, str):
             value = value.replace('_', ' ').title()
-        elif isinstance(value, (int, float)):
-            value = f"{value} hours" if 'hours' in key else str(value)
+        else:
+            value = str(value)
         profile_items.append([label + ':', str(value)])
-    
+
+    bmi = _bmi(profile_data.get('height'), profile_data.get('weight'))
+    if bmi is not None:
+        profile_items.append(['BMI:', f'{bmi:.1f}'])
+
     profile_table = Table(profile_items, colWidths=[2*inch, 4*inch])
     profile_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (0, -1), rl_colors.HexColor('#F8FAFC')),
@@ -196,6 +234,113 @@ def create_health_report_pdf(
         ('PADDING', (0, 0), (-1, -1), 8),
     ]))
     story.append(profile_table)
+
+    # ---- Clinical sections. ------------------------------------------------
+    # These are the parts a doctor actually needs and the report never had:
+    # what the patient has been diagnosed with and for how long, what they
+    # take, what they react to, and their latest numbers.
+    if clinical:
+        def _table(title: str, rows: List[List[str]], empty: str) -> None:
+            story.append(Spacer(1, 0.22 * inch))
+            story.append(Paragraph(title, heading_style))
+            data = rows if rows else [[empty, '']]
+            table = Table(data, colWidths=[2.4 * inch, 3.6 * inch])
+            table.setStyle(TableStyle([
+                ('TEXTCOLOR', (0, 0), (-1, -1), rl_colors.HexColor('#0F172A')),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+                ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('GRID', (0, 0), (-1, -1), 0.5, rl_colors.HexColor('#E2E8F0')),
+                ('PADDING', (0, 0), (-1, -1), 6),
+            ]))
+            story.append(table)
+
+        _table(
+            'Diagnosed Conditions',
+            [[str(c.get('name', '')),
+              '{0}, {1}, {2}'.format(
+                  str(c.get('diagnosed_bucket', 'unknown')).replace('_', ' '),
+                  str(c.get('control', 'unsure')) + ' control',
+                  str(c.get('treatment', 'none')).replace('_', ' '))]
+             for c in (clinical.get('conditions') or [])],
+            'None recorded',
+        )
+
+        _table(
+            'Current Medications',
+            [[str(m.get('name', '')),
+              ', '.join(filter(None, [
+                  str(m.get('dose') or ''),
+                  str(m.get('frequency') or '').upper(),
+                  ('for ' + str(m['for_condition'])) if m.get('for_condition') else '',
+              ])) or 'no detail recorded']
+             for m in (clinical.get('medications') or [])],
+            'None recorded',
+        )
+
+        # Allergies carry a severity marker because this is the line a
+        # prescriber is most likely to scan for.
+        _table(
+            'Allergies',
+            [[str(a.get('allergen', '')),
+              '{0} allergy{1}'.format(
+                  str(a.get('category', 'other')),
+                  (', reaction: ' + str(a['reaction']).replace('_', ' '))
+                  if a.get('reaction') else '')]
+             for a in (clinical.get('allergies') or [])],
+            'None recorded',
+        )
+
+        vitals = clinical.get('vitals') or {}
+        vital_labels = [
+            ('systolic_mmhg', 'Blood pressure systolic (mmHg)'),
+            ('diastolic_mmhg', 'Blood pressure diastolic (mmHg)'),
+            ('fasting_glucose_mgdl', 'Fasting glucose (mg/dL)'),
+            ('hba1c_percent', 'HbA1c (%)'),
+            ('total_cholesterol_mgdl', 'Total cholesterol (mg/dL)'),
+            ('hdl_mgdl', 'HDL (mg/dL)'),
+            ('ldl_mgdl', 'LDL (mg/dL)'),
+            ('triglycerides_mgdl', 'Triglycerides (mg/dL)'),
+            ('resting_hr_bpm', 'Resting heart rate (bpm)'),
+            ('waist_cm', 'Waist (cm)'),
+        ]
+        _table(
+            'Recent Vitals',
+            [[label, str(vitals[key])] for key, label in vital_labels
+             if vitals.get(key) is not None],
+            'No measurements recorded',
+        )
+
+        family_rows = {}
+        for f in (clinical.get('family_history') or []):
+            cond = str(f.get('condition', ''))
+            rel = str(f.get('relation') or '').strip() or 'relation not specified'
+            onset = f.get('onset_bucket')
+            if onset and onset != 'unknown':
+                rel += ' (onset ' + str(onset).replace('_', '-') + ')'
+            family_rows.setdefault(cond, []).append(rel)
+        _table(
+            'Family History',
+            [[cond, '; '.join(rels)] for cond, rels in sorted(family_rows.items())],
+            'None recorded',
+        )
+
+        report = clinical.get('latest_report') or {}
+        if report:
+            rows = [
+                ['Risk score', '{0}/100 ({1})'.format(
+                    report.get('risk_score'), report.get('risk_level'))],
+                ['Wellness score', '{0}/100'.format(report.get('wellness_score'))],
+            ]
+            confidence = report.get('confidence')
+            if isinstance(confidence, dict) and confidence.get('confidence') is not None:
+                rows.append(['Assessment confidence', '{0}%'.format(confidence['confidence'])])
+                missing = [str(m.get('label')) for m in (confidence.get('missing') or [])]
+                if missing:
+                    rows.append(['Not yet assessed', ', '.join(missing)])
+            _table('Risk Assessment', rows, 'Not yet assessed')
 
     # Prescriptions section
     if prescriptions:

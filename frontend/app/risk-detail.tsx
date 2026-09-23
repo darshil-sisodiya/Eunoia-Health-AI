@@ -13,6 +13,14 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { colors, spacing, typography } from '../constants/theme';
 import { ONBOARDING_COPY } from '../constants/onboarding';
+import {
+  ComponentBars,
+  ConfidencePill,
+  GetCheckedCard,
+  SubScores,
+  TopDrivers,
+  toneColors,
+} from '../components/health/RiskBreakdown';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getReports,
@@ -142,15 +150,36 @@ export default function RiskDetail() {
           <Text style={styles.wellnessLabel}>{ONBOARDING_COPY.result.wellnessLabel}</Text>
 
           <View
-            style={styles.riskBadge}
+            style={[styles.riskBadge, { backgroundColor: toneColors(report.risk_level).bg }]}
             accessibilityRole="text"
             accessibilityLabel={`${ONBOARDING_COPY.result.riskLabel} ${report.risk_level}`}
           >
             <Text style={styles.riskBadgeLabel}>{`${ONBOARDING_COPY.result.riskLabel} · `}</Text>
-            <Text style={styles.riskBadgeValue}>{report.risk_level}</Text>
+            <Text
+              style={[styles.riskBadgeValue, { color: toneColors(report.risk_level).fg }]}
+            >
+              {report.risk_level}
+            </Text>
+          </View>
+
+          {/* States how much of the picture this is based on, rather than
+              presenting a partly-informed score as a settled fact. */}
+          <View style={styles.confidenceWrap}>
+            <ConfidencePill report={report} />
           </View>
 
           <Text style={styles.timestamp}>{formatTimestamp(report.created_at)}</Text>
+        </View>
+
+        {/* Where the score comes from: each component against its own cap,
+            the biggest drivers with their multiplier arithmetic, the
+            recognised screening scores, and what is still unknown. */}
+        <View style={styles.breakdown}>
+          <Text style={styles.breakdownTitle}>Where this comes from</Text>
+          <ComponentBars report={report} />
+          <TopDrivers report={report} />
+          <SubScores report={report} />
+          <GetCheckedCard report={report} />
         </View>
 
         {/* Trend placeholder */}
@@ -332,6 +361,19 @@ function formatTimestamp(iso: string | undefined): string {
 }
 
 const styles = StyleSheet.create({
+  confidenceWrap: {
+    marginTop: spacing.md,
+    alignItems: 'center',
+  },
+  breakdown: {
+    paddingHorizontal: spacing.screenPadding,
+    marginTop: spacing.xl,
+  },
+  breakdownTitle: {
+    ...typography.title,
+    color: colors.textPrimary,
+    marginBottom: spacing.md,
+  },
   container: {
     flex: 1,
     backgroundColor: colors.background,

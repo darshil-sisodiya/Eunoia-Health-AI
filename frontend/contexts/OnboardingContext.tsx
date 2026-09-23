@@ -9,85 +9,95 @@ import React, {
 } from 'react';
 
 import type {
+  AllergyEntry,
   BasicProfile,
+  ConditionEntry,
+  FamilyEntry,
   HereditaryCondition,
   Lifestyle,
   Location,
   MedicalHistory,
+  MedicationEntry,
+  MentalHealth,
+  OnboardingDraft,
+  Vitals,
+  WomensHealth,
 } from '../utils/onboardingApi';
-import {
-  clearDraft,
-  loadDraft,
-  saveDraft,
-  type OnboardingDraft,
-} from '../utils/onboardingDraft';
+import { clearDraft, loadDraft, saveDraft } from '../utils/onboardingDraft';
+import { EMPTY_DRAFT } from '../utils/onboardingDraftShape';
+import { nextStep, prevStep, resumeTarget } from '../utils/onboardingFlow';
+import type { StepId } from '../constants/onboardingSteps';
 
-// Re-export the supporting types for ergonomics: consumers import everything
-// they need from this context module.
+// Re-exported for ergonomics: screens import everything they need from here.
 export type {
+  AllergyEntry,
   BasicProfile,
+  ConditionEntry,
+  FamilyEntry,
   HereditaryCondition,
   Lifestyle,
   Location,
   MedicalHistory,
+  MedicationEntry,
+  MentalHealth,
+  OnboardingDraft,
+  Vitals,
+  WomensHealth,
 } from '../utils/onboardingApi';
-export type { OnboardingDraft } from '../utils/onboardingDraft';
 
 // ==================== Constants ====================
 
-/** Total cap across the three Medical_History lists (Requirement 5.7). */
-const MEDICAL_CAP = 50;
-const MIN_STEP = 1;
-const MAX_STEP = 7;
+/**
+ * Per-list cap, matching the backend's `max_length=50` on each list.
+ *
+ * This used to be a single 50-entry budget shared across all three lists,
+ * which the backend never enforced. The visible consequence was that a user
+ * with many conditions silently could not add an allergy — a safety-relevant
+ * field — because an unrelated list had used up the budget.
+ */
+export const MEDICAL_LIST_CAP = 50;
 
-/** Initial draft used on a fresh install or after `reset()`. */
-const EMPTY_DRAFT: OnboardingDraft = {
-  basic: null,
-  lifestyle: null,
-  medical: {
-    existing_conditions: [],
-    allergies: [],
-    current_medications: [],
-  },
-  family_history: [],
-  location: null,
-};
-
-const INITIAL_MEDICAL_UI: OnboardingState['medicalUI'] = {
-  existingConditionsOpen: false,
-  allergiesOpen: false,
-  currentMedicationsOpen: false,
-};
+export type MedicalListKey = 'conditions' | 'medications' | 'allergy_entries';
 
 // ==================== Public types ====================
 
 export interface OnboardingState {
-  /** True once the first `loadDraft()` call has resolved. */
+  /** True once the first `loadDraft()` has resolved. */
   hydrated: boolean;
-  /** 1..7. Always clamped to that range by `markStep`. */
-  currentStep: number;
-  /** The in-flight onboarding submission. */
+  /**
+   * Which step the user is on, as an id.
+   *
+   * Never an index. Indices shift the moment a step is inserted, which
+   * silently mis-resumes every draft already in flight.
+   */
+  currentStepId: StepId;
   draft: OnboardingDraft;
-  /** Per-section open/closed state for the Medical_History step. */
-  medicalUI: {
-    existingConditionsOpen: boolean;
-    allergiesOpen: boolean;
-    currentMedicationsOpen: boolean;
-  };
-  /** Cached `/api/cities` Karnataka city list. `null` until step 6 fetches it. */
+  /** Open/closed state, keyed freely so per-condition accordions can use it. */
+  openSections: Record<string, boolean>;
   cities: string[] | null;
-  /** True iff the total selected medical-history entries === {@link MEDICAL_CAP}. */
-  capReached: boolean;
+  /** Per-list, because the caps are per-list. */
+  capReached: Record<MedicalListKey, boolean>;
 }
 
 export interface OnboardingActions {
   setBasic(b: BasicProfile): void;
   setLifestyle<K extends keyof Lifestyle>(field: K, value: Lifestyle[K]): void;
-  toggleMedical(list: keyof MedicalHistory, value: string): void;
+  setVitals(v: Vitals): void;
+  setMental(m: MentalHealth): void;
+  setWomensHealth(w: WomensHealth): void;
+  setConditions(list: ConditionEntry[]): void;
+  setMedications(list: MedicationEntry[]): void;
+  setAllergies(list: AllergyEntry[]): void;
+  setTakesMedication(value: boolean): void;
+  setFamily(list: FamilyEntry[]): void;
   toggleFamily(condition: HereditaryCondition): void;
   setLocation(loc: Location): void;
-  markStep(n: number): void;
-  toggleMedicalSection(section: keyof OnboardingState['medicalUI']): void;
+  /** Jump to a specific step. Prefer `advance()`/`retreat()`. */
+  goTo(id: StepId): void;
+  /** Move one step forward through the steps that apply to this draft. */
+  advance(from: StepId): StepId | null;
+  retreat(from: StepId): StepId | null;
+  toggleSection(key: string): void;
   setCities(cities: string[]): void;
   reset(): void;
 }
@@ -95,159 +105,135 @@ export interface OnboardingActions {
 // ==================== Reducer ====================
 
 type Action =
-  | { type: 'HYDRATE'; currentStep: number; data: OnboardingDraft }
+  | { type: 'HYDRATE'; currentStepId: StepId; data: OnboardingDraft }
   | { type: 'HYDRATE_EMPTY' }
   | { type: 'SET_BASIC'; payload: BasicProfile }
-  | {
-      type: 'SET_LIFESTYLE';
-      field: keyof Lifestyle;
-      value: Lifestyle[keyof Lifestyle];
-    }
-  | { type: 'TOGGLE_MEDICAL'; list: keyof MedicalHistory; value: string }
+  | { type: 'SET_LIFESTYLE'; field: keyof Lifestyle; value: unknown }
+  | { type: 'SET_VITALS'; payload: Vitals }
+  | { type: 'SET_MENTAL'; payload: MentalHealth }
+  | { type: 'SET_WOMENS'; payload: WomensHealth }
+  | { type: 'SET_MEDICAL_LIST'; list: MedicalListKey; payload: unknown[] }
+  | { type: 'SET_TAKES_MEDICATION'; payload: boolean }
+  | { type: 'SET_FAMILY'; payload: FamilyEntry[] }
   | { type: 'TOGGLE_FAMILY'; condition: HereditaryCondition }
   | { type: 'SET_LOCATION'; payload: Location }
-  | { type: 'MARK_STEP'; payload: number }
-  | {
-      type: 'TOGGLE_MEDICAL_SECTION';
-      section: keyof OnboardingState['medicalUI'];
-    }
+  | { type: 'GO_TO'; payload: StepId }
+  | { type: 'TOGGLE_SECTION'; key: string }
   | { type: 'SET_CITIES'; payload: string[] }
   | { type: 'RESET' };
 
-const INITIAL_STATE: OnboardingState = {
-  hydrated: false,
-  currentStep: MIN_STEP,
-  draft: EMPTY_DRAFT,
-  medicalUI: INITIAL_MEDICAL_UI,
-  cities: null,
-  capReached: false,
+const EMPTY_CAPS: Record<MedicalListKey, boolean> = {
+  conditions: false,
+  medications: false,
+  allergy_entries: false,
 };
 
-function clampStep(n: number): number {
-  if (!Number.isFinite(n)) return MIN_STEP;
-  return Math.max(MIN_STEP, Math.min(MAX_STEP, Math.trunc(n)));
+const INITIAL_STATE: OnboardingState = {
+  hydrated: false,
+  currentStepId: 'welcome',
+  draft: EMPTY_DRAFT,
+  openSections: {},
+  cities: null,
+  capReached: { ...EMPTY_CAPS },
+};
+
+function capsFor(medical: MedicalHistory): Record<MedicalListKey, boolean> {
+  return {
+    conditions: medical.conditions.length >= MEDICAL_LIST_CAP,
+    medications: medical.medications.length >= MEDICAL_LIST_CAP,
+    allergy_entries: medical.allergy_entries.length >= MEDICAL_LIST_CAP,
+  };
 }
 
-function totalMedicalCount(medical: MedicalHistory): number {
-  return (
-    medical.existing_conditions.length +
-    medical.allergies.length +
-    medical.current_medications.length
-  );
-}
-
-/** Recomputes `capReached` after any draft mutation. */
-function withCapReached(state: OnboardingState): OnboardingState {
-  const total = totalMedicalCount(state.draft.medical);
-  const capReached = total >= MEDICAL_CAP;
-  if (capReached === state.capReached) return state;
-  return { ...state, capReached };
+function withDraft(state: OnboardingState, draft: OnboardingDraft): OnboardingState {
+  return { ...state, draft, capReached: capsFor(draft.medical) };
 }
 
 function reducer(state: OnboardingState, action: Action): OnboardingState {
   switch (action.type) {
     case 'HYDRATE': {
-      const next: OnboardingState = {
-        ...state,
-        hydrated: true,
-        currentStep: clampStep(action.currentStep),
-        draft: action.data,
-      };
-      return withCapReached(next);
+      // Resolve the stored step against the restored draft: it may no longer
+      // apply (gender changed, last condition removed), in which case
+      // `resumeTarget` snaps forward rather than stranding the user.
+      const target = resumeTarget(action.data, action.currentStepId);
+      return withDraft({ ...state, hydrated: true, currentStepId: target }, action.data);
     }
     case 'HYDRATE_EMPTY':
       return { ...state, hydrated: true };
 
     case 'SET_BASIC':
-      return {
-        ...state,
-        draft: { ...state.draft, basic: action.payload },
-      };
+      return withDraft(state, { ...state.draft, basic: action.payload });
 
     case 'SET_LIFESTYLE': {
-      // The Lifestyle screen sets one field at a time across six sub-questions,
-      // so the in-flight value is allowed to be a partial Lifestyle until the
-      // last sub-question is answered. We cast at the boundary; the API
-      // submission path is responsible for ensuring all six fields are present.
+      // Set one field at a time across the lifestyle sub-questions, so the
+      // value stays partial until the last one is answered.
       const merged = {
         ...(state.draft.lifestyle ?? {}),
         [action.field]: action.value,
-      } as Lifestyle;
-      return {
-        ...state,
-        draft: { ...state.draft, lifestyle: merged },
-      };
+      } as Partial<Lifestyle>;
+      return withDraft(state, { ...state.draft, lifestyle: merged });
     }
 
-    case 'TOGGLE_MEDICAL': {
-      const list = state.draft.medical[action.list];
-      const idx = list.indexOf(action.value);
-      let nextList: string[];
-      if (idx >= 0) {
-        // Removing an entry is always allowed — even when the cap is reached.
-        nextList = [...list.slice(0, idx), ...list.slice(idx + 1)];
-      } else if (totalMedicalCount(state.draft.medical) >= MEDICAL_CAP) {
-        // Adds beyond the 50-entry cap are no-ops; the screen renders the
-        // inline cap-message UI by reading `state.capReached`.
-        return withCapReached(state);
-      } else {
-        nextList = [...list, action.value];
-      }
-      const nextMedical: MedicalHistory = {
-        ...state.draft.medical,
-        [action.list]: nextList,
-      };
-      return withCapReached({
-        ...state,
-        draft: { ...state.draft, medical: nextMedical },
-      });
+    case 'SET_VITALS':
+      return withDraft(state, { ...state.draft, vitals: action.payload });
+
+    case 'SET_MENTAL':
+      return withDraft(state, { ...state.draft, mental: action.payload });
+
+    case 'SET_WOMENS':
+      return withDraft(state, { ...state.draft, womens_health: action.payload });
+
+    case 'SET_MEDICAL_LIST': {
+      // Truncate rather than reject, so a paste or bulk import cannot fail
+      // silently past the cap.
+      const capped = action.payload.slice(0, MEDICAL_LIST_CAP);
+      const medical = { ...state.draft.medical, [action.list]: capped } as MedicalHistory;
+      return withDraft(state, { ...state.draft, medical });
     }
+
+    case 'SET_TAKES_MEDICATION':
+      return withDraft(state, { ...state.draft, takes_medication: action.payload });
+
+    case 'SET_FAMILY':
+      return withDraft(state, { ...state.draft, family: action.payload });
 
     case 'TOGGLE_FAMILY': {
-      const list = state.draft.family_history;
-      const idx = list.indexOf(action.condition);
-      const nextList =
-        idx >= 0
-          ? [...list.slice(0, idx), ...list.slice(idx + 1)]
-          : [...list, action.condition];
-      return {
-        ...state,
-        draft: { ...state.draft, family_history: nextList },
-      };
+      const list = state.draft.family ?? [];
+      const at = list.findIndex((entry) => entry.condition === action.condition);
+      const next =
+        at >= 0
+          ? [...list.slice(0, at), ...list.slice(at + 1)]
+          : [
+              ...list,
+              // Defaults are deliberately the uninformative ones; the inline
+              // follow-up asks for relation and onset.
+              { condition: action.condition, relations: [], onset_bucket: 'unknown' as const },
+            ];
+      return withDraft(state, { ...state.draft, family: next });
     }
 
     case 'SET_LOCATION':
+      return withDraft(state, { ...state.draft, location: action.payload });
+
+    case 'GO_TO':
+      return { ...state, currentStepId: action.payload };
+
+    case 'TOGGLE_SECTION':
       return {
         ...state,
-        draft: { ...state.draft, location: action.payload },
-      };
-
-    case 'MARK_STEP':
-      return { ...state, currentStep: clampStep(action.payload) };
-
-    case 'TOGGLE_MEDICAL_SECTION':
-      return {
-        ...state,
-        medicalUI: {
-          ...state.medicalUI,
-          [action.section]: !state.medicalUI[action.section],
-        },
+        openSections: { ...state.openSections, [action.key]: !state.openSections[action.key] },
       };
 
     case 'SET_CITIES':
       return { ...state, cities: action.payload };
 
     case 'RESET':
-      // Stay hydrated so the persistence effect continues to track future
-      // edits. Cached cities are intentionally preserved across resets so
-      // step 6 does not have to refetch within the same app session.
+      // Stay hydrated so the persistence effect keeps tracking edits. Cached
+      // cities survive a reset so the location step need not refetch.
       return {
+        ...INITIAL_STATE,
         hydrated: true,
-        currentStep: MIN_STEP,
-        draft: EMPTY_DRAFT,
-        medicalUI: INITIAL_MEDICAL_UI,
         cities: state.cities,
-        capReached: false,
       };
 
     default:
@@ -257,24 +243,22 @@ function reducer(state: OnboardingState, action: Action): OnboardingState {
 
 // ==================== Context + provider ====================
 
-const OnboardingContext = createContext<
-  (OnboardingState & OnboardingActions) | undefined
->(undefined);
+const OnboardingContext = createContext<(OnboardingState & OnboardingActions) | undefined>(
+  undefined,
+);
 
-export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
-  children,
-}) => {
+export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
 
-  // Tracks whether the post-hydration sentinel has fired so we can skip the
-  // first persistence run (the value we just loaded does not need to be
-  // written back).
+  // Skips writing back the value we just loaded.
   const hydratedOnceRef = useRef(false);
-  // Allows `reset()` to suppress the next persistence run so it can clear the
-  // AsyncStorage entry instead of immediately re-saving an empty draft.
+  // Lets `reset()` clear storage instead of immediately re-saving an empty draft.
   const skipNextSaveRef = useRef(false);
+  // Read by `advance`/`retreat` so they see the current draft without being
+  // re-created on every keystroke.
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
-  // Hydrate from AsyncStorage on first mount.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -284,7 +268,7 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
         if (stored) {
           dispatch({
             type: 'HYDRATE',
-            currentStep: stored.currentStep,
+            currentStepId: stored.currentStepId,
             data: stored.data,
           });
         } else {
@@ -299,9 +283,6 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, []);
 
-  // Persist the draft on every (currentStep, draft) change once hydrated.
-  // The first hydration tick is skipped so we do not write the value we
-  // just loaded back to storage with a fresh `updatedAt`.
   useEffect(() => {
     if (!state.hydrated) return;
     if (!hydratedOnceRef.current) {
@@ -312,10 +293,10 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
       skipNextSaveRef.current = false;
       return;
     }
-    saveDraft({ currentStep: state.currentStep, data: state.draft }).catch(() => {
-      // Persistence is best-effort; in-memory state stays the source of truth.
+    saveDraft({ currentStepId: state.currentStepId, data: state.draft }).catch(() => {
+      // Best-effort; in-memory state remains the source of truth.
     });
-  }, [state.hydrated, state.currentStep, state.draft]);
+  }, [state.hydrated, state.currentStepId, state.draft]);
 
   const setBasic = useCallback((b: BasicProfile) => {
     dispatch({ type: 'SET_BASIC', payload: b });
@@ -328,13 +309,34 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
     [],
   );
 
-  const toggleMedical = useCallback(
-    (list: keyof MedicalHistory, value: string) => {
-      dispatch({ type: 'TOGGLE_MEDICAL', list, value });
-    },
+  const setVitals = useCallback((v: Vitals) => dispatch({ type: 'SET_VITALS', payload: v }), []);
+  const setMental = useCallback((m: MentalHealth) => dispatch({ type: 'SET_MENTAL', payload: m }), []);
+  const setWomensHealth = useCallback(
+    (w: WomensHealth) => dispatch({ type: 'SET_WOMENS', payload: w }),
     [],
   );
 
+  const setConditions = useCallback(
+    (list: ConditionEntry[]) => dispatch({ type: 'SET_MEDICAL_LIST', list: 'conditions', payload: list }),
+    [],
+  );
+  const setMedications = useCallback(
+    (list: MedicationEntry[]) => dispatch({ type: 'SET_MEDICAL_LIST', list: 'medications', payload: list }),
+    [],
+  );
+  const setAllergies = useCallback(
+    (list: AllergyEntry[]) => dispatch({ type: 'SET_MEDICAL_LIST', list: 'allergy_entries', payload: list }),
+    [],
+  );
+  const setTakesMedication = useCallback(
+    (value: boolean) => dispatch({ type: 'SET_TAKES_MEDICATION', payload: value }),
+    [],
+  );
+
+  const setFamily = useCallback(
+    (list: FamilyEntry[]) => dispatch({ type: 'SET_FAMILY', payload: list }),
+    [],
+  );
   const toggleFamily = useCallback((condition: HereditaryCondition) => {
     dispatch({ type: 'TOGGLE_FAMILY', condition });
   }, []);
@@ -343,16 +345,26 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
     dispatch({ type: 'SET_LOCATION', payload: loc });
   }, []);
 
-  const markStep = useCallback((n: number) => {
-    dispatch({ type: 'MARK_STEP', payload: n });
+  const goTo = useCallback((id: StepId) => dispatch({ type: 'GO_TO', payload: id }), []);
+
+  // Screens must never name their successor. That is exactly what made the
+  // old flow brittle: `markStep(3)` in one screen, `markStep(4)` in another,
+  // and inserting a step meant renumbering all of them.
+  const advance = useCallback((from: StepId) => {
+    const target = nextStep(stateRef.current.draft, from);
+    if (target) dispatch({ type: 'GO_TO', payload: target.id });
+    return target?.id ?? null;
   }, []);
 
-  const toggleMedicalSection = useCallback(
-    (section: keyof OnboardingState['medicalUI']) => {
-      dispatch({ type: 'TOGGLE_MEDICAL_SECTION', section });
-    },
-    [],
-  );
+  const retreat = useCallback((from: StepId) => {
+    const target = prevStep(stateRef.current.draft, from);
+    if (target) dispatch({ type: 'GO_TO', payload: target.id });
+    return target?.id ?? null;
+  }, []);
+
+  const toggleSection = useCallback((key: string) => {
+    dispatch({ type: 'TOGGLE_SECTION', key });
+  }, []);
 
   const setCities = useCallback((cities: string[]) => {
     dispatch({ type: 'SET_CITIES', payload: cities });
@@ -361,9 +373,7 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
   const reset = useCallback(() => {
     skipNextSaveRef.current = true;
     dispatch({ type: 'RESET' });
-    clearDraft().catch(() => {
-      // Best-effort cleanup; the in-memory reset has already happened.
-    });
+    clearDraft().catch(() => undefined);
   }, []);
 
   const value = useMemo<OnboardingState & OnboardingActions>(
@@ -371,33 +381,31 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({
       ...state,
       setBasic,
       setLifestyle,
-      toggleMedical,
+      setVitals,
+      setMental,
+      setWomensHealth,
+      setConditions,
+      setMedications,
+      setAllergies,
+      setTakesMedication,
+      setFamily,
       toggleFamily,
       setLocation,
-      markStep,
-      toggleMedicalSection,
+      goTo,
+      advance,
+      retreat,
+      toggleSection,
       setCities,
       reset,
     }),
     [
-      state,
-      setBasic,
-      setLifestyle,
-      toggleMedical,
-      toggleFamily,
-      setLocation,
-      markStep,
-      toggleMedicalSection,
-      setCities,
-      reset,
+      state, setBasic, setLifestyle, setVitals, setMental, setWomensHealth,
+      setConditions, setMedications, setAllergies, setTakesMedication, setFamily,
+      toggleFamily, setLocation, goTo, advance, retreat, toggleSection, setCities, reset,
     ],
   );
 
-  return (
-    <OnboardingContext.Provider value={value}>
-      {children}
-    </OnboardingContext.Provider>
-  );
+  return <OnboardingContext.Provider value={value}>{children}</OnboardingContext.Provider>;
 };
 
 export function useOnboarding(): OnboardingState & OnboardingActions {

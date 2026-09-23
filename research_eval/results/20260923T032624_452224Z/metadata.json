@@ -1,0 +1,39 @@
+{
+  "timestamp_utc": "2026-09-23T03:26:24.456233+00:00",
+  "python": "3.11.3 (tags/v3.11.3:f3909b8, Apr  4 2023, 23:49:59) [MSC v.1934 64 bit (AMD64)]",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+  "commit": "51f141f16bc3a69bced43cb3397e5ac9abf45ce1",
+  "working_tree": "M backend/pdf_generator.py\n M backend/risk_engine.py\n M backend/server.py\n M backend/verify_prescriptions.py\n M frontend/app.json\n M frontend/app/(tabs)/home.tsx\n M frontend/app/(tabs)/prescriptions.tsx\n M frontend/app/(tabs)/profile.tsx\n M frontend/app/_layout.tsx\n M frontend/app/cost-estimator.tsx\n M frontend/app/index.tsx\n M frontend/app/onboarding/_layout.tsx\n M frontend/app/onboarding/analyzing.tsx\n M frontend/app/onboarding/basic.tsx\n M frontend/app/onboarding/family.tsx\n M frontend/app/onboarding/lifestyle.tsx\n M frontend/app/onboarding/location.tsx\nD  frontend/app/onboarding/medical.tsx\n M frontend/app/onboarding/result.tsx\n M frontend/app/risk-detail.tsx\n M frontend/components/onboarding/OnboardingShell.tsx\n M frontend/constants/onboarding.ts\n M frontend/contexts/OnboardingContext.tsx\n M frontend/package.json\n M frontend/tsconfig.json\n M frontend/utils/api.ts\n M frontend/utils/onboardingApi.ts\n M frontend/utils/onboardingDraft.ts\n?? .claude/\n?? TABLE_1_AUDIT.md\n?? TABLE_1_CORRECTED.csv\n?? TABLE_1_CORRECTED.md\n?? backend/profile_context.py\n?? backend/pytest.ini\n?? backend/tests/test_profile_bundle.py\n?? backend/tests/test_profile_context.py\n?? backend/tests/test_risk_engine.py\n?? frontend/app/onboarding/conditions.tsx\n?? frontend/app/onboarding/medications.tsx\n?? frontend/app/onboarding/mental.tsx\n?? frontend/app/onboarding/vitals.tsx\n?? frontend/app/onboarding/womens.tsx\n?? frontend/app/profile/\n?? frontend/components/health/\n?? frontend/components/onboarding/NumberField.tsx\n?? frontend/components/onboarding/NumberOrUnknown.tsx\n?? frontend/components/onboarding/SegmentedRow.tsx\n?? frontend/constants/onboardingSteps.ts\n?? frontend/contexts/HealthProfileContext.tsx\n?? frontend/utils/__checks__/\n?? frontend/utils/onboardingDraftShape.ts\n?? frontend/utils/onboardingFlow.ts\n?? frontend/utils/onboardingPayload.ts\n?? frontend/utils/riskView.ts\n?? frontend/utils/useOnboardingStep.ts\n?? research_eval/",
+  "repeats": 100,
+  "seed": 20260923,
+  "input_sha256": {
+    "research_eval\\evaluate.py": "e85232dadee1282a09f75d6722530a44fca75d59c51f8827ed5c964b4bc8804c",
+    "blr.xlsx": "878ef6ff9594d75efb20e2ec6b9bec9c50ae53886e6f1590e5d72835ee28e73a",
+    "karnataka_hospitals_200.csv": "a16ab2a64530c3df6ef2e12199908b6f3fc6ff684cbae26373ce7f6bde9b7bca",
+    "backend\\bangalore_estimator.py": "a9273564740828b3b203ba86944f219c9a8790c6f7ede94727d3058669643df4",
+    "backend\\cities.py": "19ef69864355eb65a55370f509bd3204160e7be0d5453cec0491f3ea26c85144",
+    "backend\\cost_estimator.py": "dddd95db71a66c09c57bfec8bdaf99a245abdbfcfd3b340e4a4a5a64bd62d6d3",
+    "backend\\cost_refiner.py": "d6d5cf8fc5eaa5ac58ce5d5a326a983d17af7d0294dcc1f620b31e4bfd390ffa",
+    "backend\\drop_prescriptions.py": "cbf821c911f70053c63e16f4a970623540b76ab626999706b0201f9e27f2509b",
+    "backend\\gemini_insights.py": "ed4d8e9912239dc2368a83bbe4f17f35d2665317b9484a092e7401db0fb57ada",
+    "backend\\pdf_generator.py": "d856bd222f65c43b3af4a425a65f5cd31f74ee25248b67abf49ac565c5bd734a",
+    "backend\\profile_context.py": "e4b8cd0f14ab6847f1a3e9be4e94a471ee62d50fbe402bb9a0e05b310f7fa0e3",
+    "backend\\risk_engine.py": "37584f91db3d39e816b90410a3cee32947c27458fbe6427ea44781e6758974ac",
+    "backend\\server.py": "996c877147223d5c1cb053fb062f0c9ad67bbc9a18b31d5288e54c5db00f74a6",
+    "backend\\specialization_keywords.py": "c5df1623854904fbe25af777f62b5b14bd8a477a8f082ab07d58b732b569b6b2",
+    "backend\\specialization_mapper.py": "fecf0e99afb51fedc2e770a33acb065d0adb6e7cd7085cda50322732b04bf215",
+    "backend\\verify_prescriptions.py": "fbe38f544ac2a990426be3ac0fcd86f22b9ee63a5c40578de7112c4b9ef55340",
+    "backend\\__init__.py": "bf6d3aa1f758bc85a01d9e79ebba2de54201009200c7a83347a7e33c7e9c5fde",
+    "research_eval\\inputs\\external_latency.csv": "e8cf8518d0d9f925f849e42e4f3b552641a85957be6d88a7ed97ef355ba3a842",
+    "research_eval\\inputs\\prescription_fields.csv": "3f8f500d93118612e1874a5e30f11e1e49b2eea8dc69dc696ea9734f98d8c0af",
+    "research_eval\\inputs\\specialty_labels.csv": "863b56932e54af790aa1fd647417f8a08e74a38abc8d9ea35bc48e3edaab0abd",
+    "research_eval\\inputs\\usability.csv": "8fff2ceee50642f3bb7c8b4d6b097b73e18e31e0e7b82fdcffd6f0f18311663f"
+  },
+  "packages": {
+    "matplotlib": "3.10.8",
+    "numpy": "2.4.2",
+    "openpyxl": "3.1.5"
+  },
+  "scope": "Local prototype evaluation; constructed inputs; no clinical outcome validation"
+}

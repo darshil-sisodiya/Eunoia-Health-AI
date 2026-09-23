@@ -1,120 +1,62 @@
+// ── Onboarding draft persistence ────────────────────────────────
+// Storage only. Every decision about shape, versioning and expiry lives in
+// `onboardingDraftShape.ts`, which is pure and therefore checkable by
+// `npm run check` without a native module.
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import type {
-  BasicProfile,
-  HereditaryCondition,
-  Lifestyle,
-  Location,
-  MedicalHistory,
-} from './onboardingApi';
+import {
+  DRAFT_KEY,
+  LEGACY_DRAFT_KEYS,
+  parseStoredDraft,
+  serializeDraft,
+} from './onboardingDraftShape';
+import type { StoredDraft } from './onboardingDraftShape';
+import type { OnboardingDraft } from './onboardingApi';
+import type { StepId } from '../constants/onboardingSteps';
 
-// ==================== Constants ====================
+export { DRAFT_KEY, DRAFT_TTL_MS, EMPTY_DRAFT } from './onboardingDraftShape';
+export type { StoredDraft } from './onboardingDraftShape';
+export type { OnboardingDraft } from './onboardingApi';
 
-/** AsyncStorage key for the in-flight onboarding draft. */
-export const DRAFT_KEY = 'eunoia.onboarding.draft.v1';
-
-/** Time-to-live for a stored draft (30 minutes), in milliseconds. */
-export const DRAFT_TTL_MS = 30 * 60 * 1000;
-
-// ==================== Types ====================
-
-/**
- * The in-flight onboarding submission as it is being assembled across steps.
- * Mirrors design § "TypeScript draft model".
- *
- * Fields are nullable until their owning step has been completed; `medical`
- * and `family_history` start with empty collections so per-item toggles are
- * always safe.
- */
-export interface OnboardingDraft {
-  basic: BasicProfile | null;
-  lifestyle: Lifestyle | null;
-  medical: MedicalHistory;
-  family_history: HereditaryCondition[];
-  location: Location | null;
-}
-
-/** The shape stored in AsyncStorage under {@link DRAFT_KEY}. */
-export interface StoredDraft {
-  /** ISO 8601 timestamp of the most recent write. */
-  updatedAt: string;
-  /** The step the user was on at the time of the last write. */
-  currentStep: number;
-  /** The current draft submission. */
-  data: OnboardingDraft;
-}
-
-// ==================== Helpers ====================
-
-/**
- * Persists the current onboarding state under {@link DRAFT_KEY}.
- *
- * The stored payload always carries a fresh `updatedAt` so {@link loadDraft}
- * can apply the 30-minute TTL deterministically.
- */
 export async function saveDraft(state: {
-  currentStep: number;
+  currentStepId: StepId;
   data: OnboardingDraft;
 }): Promise<void> {
-  const stored: StoredDraft = {
-    updatedAt: new Date().toISOString(),
-    currentStep: state.currentStep,
-    data: state.data,
-  };
-  await AsyncStorage.setItem(DRAFT_KEY, JSON.stringify(stored));
+  await AsyncStorage.setItem(
+    DRAFT_KEY,
+    serializeDraft(state.currentStepId, state.data, Date.now()),
+  );
 }
 
-/**
- * Removes any persisted onboarding draft.
- *
- * Safe to call when no draft is present; AsyncStorage's `removeItem` is a no-op
- * for missing keys.
- */
+/** Safe to call when nothing is stored; `removeItem` is a no-op for a missing key. */
 export async function clearDraft(): Promise<void> {
   await AsyncStorage.removeItem(DRAFT_KEY);
 }
 
 /**
- * Reads the persisted onboarding draft, returning it only when it is still
- * within the {@link DRAFT_TTL_MS} window.
+ * Read the persisted draft, or null when absent, unparseable or expired.
  *
- * Returns `null` and clears the entry when:
- * - no draft is stored,
- * - the stored value cannot be parsed,
- * - the stored `updatedAt` is invalid, or
- * - the draft is older than 30 minutes.
+ * Also removes any v1 entry. v1 drafts are not migrated: that format had a
+ * 30-minute TTL, so anything still holding one was abandoned within the last
+ * half hour. Cleaning the key up stops it lingering in storage forever.
  */
 export async function loadDraft(): Promise<StoredDraft | null> {
-  let raw: string | null;
+  let raw: string | null = null;
   try {
     raw = await AsyncStorage.getItem(DRAFT_KEY);
+    await Promise.all(
+      LEGACY_DRAFT_KEYS.map((key) => AsyncStorage.removeItem(key).catch(() => undefined)),
+    );
   } catch {
-    await clearDraft();
+    await clearDraft().catch(() => undefined);
     return null;
   }
 
-  if (raw == null) {
+  const parsed = parseStoredDraft(raw, Date.now());
+  if (!parsed) {
+    await clearDraft().catch(() => undefined);
     return null;
   }
-
-  let parsed: StoredDraft;
-  try {
-    parsed = JSON.parse(raw) as StoredDraft;
-  } catch {
-    await clearDraft();
-    return null;
-  }
-
-  const updatedAtMs = new Date(parsed?.updatedAt ?? '').getTime();
-  if (Number.isNaN(updatedAtMs)) {
-    await clearDraft();
-    return null;
-  }
-
-  if (Date.now() - updatedAtMs <= DRAFT_TTL_MS) {
-    return parsed;
-  }
-
-  await clearDraft();
-  return null;
+  return parsed;
 }
