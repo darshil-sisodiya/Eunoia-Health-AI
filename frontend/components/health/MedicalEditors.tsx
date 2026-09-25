@@ -128,7 +128,7 @@ export function ConditionsEditor({
           CONTROL_OPTIONS.find((o) => o.value === entry.control)?.label,
         ]
           .filter(Boolean)
-          .join(' · ')
+          .join(', ')
       }
       renderDetail={(entry, update) => (
         <>
@@ -179,7 +179,7 @@ export function MedicationsEditor({
       summaryOf={(entry) =>
         [entry.dose, entry.for_condition ? `for ${entry.for_condition}` : null]
           .filter(Boolean)
-          .join(' · ')
+          .join(', ')
       }
       renderDetail={(entry, update) => (
         <>

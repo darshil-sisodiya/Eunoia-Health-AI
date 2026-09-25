@@ -65,8 +65,8 @@ export type KarnatakaCity = (typeof KARNATAKA_CITIES_FALLBACK)[number];
 export const LIFESTYLE_QUESTIONS = [
   {
     id: 'smoking',
-    eyebrow: 'Lifestyle · 01 / 06',
-    question: 'How would you describe your smoking habits?',
+    eyebrow: 'Lifestyle',
+    question: 'Do you smoke?',
     options: [
       { value: 'never', label: 'Never smoked' },
       { value: 'former', label: 'Former smoker' },
@@ -76,7 +76,7 @@ export const LIFESTYLE_QUESTIONS = [
   },
   {
     id: 'alcohol',
-    eyebrow: 'Lifestyle · 02 / 06',
+    eyebrow: 'Lifestyle',
     question: 'How often do you drink alcohol?',
     options: [
       { value: 'never', label: 'Never' },
@@ -87,7 +87,7 @@ export const LIFESTYLE_QUESTIONS = [
   },
   {
     id: 'exercise_frequency',
-    eyebrow: 'Lifestyle · 03 / 06',
+    eyebrow: 'Lifestyle',
     question: 'How often do you exercise?',
     options: [
       { value: 'never', label: 'Never' },
@@ -98,7 +98,7 @@ export const LIFESTYLE_QUESTIONS = [
   },
   {
     id: 'water_intake',
-    eyebrow: 'Lifestyle · 04 / 06',
+    eyebrow: 'Lifestyle',
     question: 'How much water do you drink on a typical day?',
     options: [
       { value: 'low', label: 'Low' },
@@ -108,8 +108,8 @@ export const LIFESTYLE_QUESTIONS = [
   },
   {
     id: 'sleep_quality',
-    eyebrow: 'Lifestyle · 05 / 06',
-    question: 'How would you rate your sleep quality?',
+    eyebrow: 'Lifestyle',
+    question: 'How well do you usually sleep?',
     options: [
       { value: 'poor', label: 'Poor' },
       { value: 'fair', label: 'Fair' },
@@ -119,8 +119,8 @@ export const LIFESTYLE_QUESTIONS = [
   },
   {
     id: 'stress_level',
-    eyebrow: 'Lifestyle · 06 / 06',
-    question: 'How would you describe your stress level?',
+    eyebrow: 'Lifestyle',
+    question: 'How stressed do you feel most days?',
     options: [
       { value: 'low', label: 'Low' },
       { value: 'moderate', label: 'Moderate' },
@@ -147,25 +147,26 @@ export const PROGRESS_MESSAGES = [
 export type ProgressMessage = (typeof PROGRESS_MESSAGES)[number];
 
 // ── Step copy strings ──────────────────────────────────────────
-// Per-step eyebrow / headline / subtitle copy. Mirrors design
-// § "Frontend Screen Breakdown". Brand and tone stay calm,
-// intelligent, and preventive (Requirement 1.5).
+// Per-step copy. `eyebrow` is the topic label the shell shows above the
+// body (the shell already shows "Step N of M"); an empty string hides it.
+// Plain, sentence case, specific.
 export const ONBOARDING_COPY = {
-  brand: 'EUNOIA',
+  brand: 'Eunoia',
   totalSteps: 7,
 
   welcome: {
-    eyebrow: 'EUNOIA',
-    headline: 'Preventive intelligence for your everyday health',
-    subtitle: 'Personalised insights, calmly delivered.',
-    primaryCta: 'Begin',
+    eyebrow: '',
+    headline: 'Stay a step ahead of your health',
+    subtitle:
+      'Tell us about yourself, your habits and your family. We turn it into a clear picture of your risks and what to check next.',
+    primaryCta: 'Start my profile',
     secondaryCta: 'I already have an account',
   },
 
   basic: {
-    eyebrow: 'Step 02 · About you',
-    headline: 'A few essentials',
-    subtitle: 'These help Eunoia personalise the rest of the flow.',
+    eyebrow: 'About you',
+    headline: 'Start with the basics',
+    subtitle: 'Age, gender, height and weight set the baseline for every estimate that follows.',
     advanceLabel: 'Continue',
     fields: {
       fullName: {
@@ -201,27 +202,26 @@ export const ONBOARDING_COPY = {
       },
     },
     errors: {
-      fullName: 'Please enter your name (up to 80 characters).',
-      age: 'Age must be a whole number between 13 and 120.',
-      gender: 'Please choose an option.',
-      heightCm: 'Height must be between 80 and 250 cm.',
-      weightKg: 'Weight must be between 20 and 300 kg.',
+      fullName: 'Enter your name, up to 80 characters.',
+      age: 'Enter your age as a whole number from 13 to 120.',
+      gender: 'Choose one option.',
+      heightCm: 'Enter a height between 80 and 250 cm.',
+      weightKg: 'Enter a weight between 20 and 300 kg.',
     },
   },
 
   lifestyle: {
-    eyebrow: 'Step 03 · Lifestyle',
-    headline: 'Your everyday rhythm',
-    subtitle: 'Six quick questions about how you live.',
+    eyebrow: 'Lifestyle',
+    headline: 'Your daily habits',
+    subtitle: 'Six quick questions about how you live day to day.',
     advanceLabel: 'Continue',
-    unansweredPrompt: 'Select an option to continue.',
+    unansweredPrompt: 'Choose an answer to continue.',
   },
 
   medical: {
-    eyebrow: 'Step 04 · Medical history',
-    headline: 'Anything we should know?',
-    subtitle:
-      'Add what applies. Skip what does not. You can search inside each list.',
+    eyebrow: 'Medical history',
+    headline: 'Has a doctor diagnosed you with anything?',
+    subtitle: 'Add what applies and skip the rest. Each list is searchable.',
     advanceLabel: 'Continue',
     sections: {
       existingConditions: 'Existing conditions',
@@ -229,52 +229,54 @@ export const ONBOARDING_COPY = {
       currentMedications: 'Current medications',
     },
     searchPlaceholder: 'Search',
-    addCustomLabel: 'Add custom entry',
-    capMessage: 'You can pick up to 50 entries',
+    addCustomLabel: 'Add your own',
+    capMessage: 'You can add up to 50 entries.',
   },
 
   family: {
-    eyebrow: 'Step 05 · Family history',
-    headline: 'Hereditary signals',
+    eyebrow: 'Family history',
+    headline: 'Does anything run in your family?',
     subtitle:
-      'Tap any conditions that run in your family. Skipping is fine too.',
+      'Tap any condition a parent, sibling or grandparent has had. Skip this if none apply.',
     advanceLabel: 'Continue',
     supporting:
-      'This information powers hereditary risk indicators and is never used to issue diagnoses.',
+      'Tap any condition a parent, sibling or grandparent has had. We use this to flag inherited risk, never to diagnose you.',
   },
 
   location: {
-    eyebrow: 'Step 06 · Location',
-    headline: 'Where are you based?',
-    subtitle:
-      'We tailor recommendations to local healthcare and accessibility.',
-    advanceLabel: 'Finish',
+    eyebrow: 'Location',
+    headline: 'Where do you live?',
+    subtitle: 'Your city lets us point you to nearby care and realistic local costs.',
+    advanceLabel: 'Analyse my profile',
     stateLabel: 'State',
     stateValue: 'Karnataka',
     cityLabel: 'City',
     cityPlaceholder: 'Choose your city',
-    cityPickerUnavailable: 'City picker unavailable',
+    cityPickerUnavailable: 'The city list could not load',
     cityRequiredError: 'Choose a city to continue.',
   },
 
   analyzing: {
-    eyebrow: 'EUNOIA',
+    eyebrow: '',
     headline: 'Analysing your profile',
-    subtitle: 'Calm, intelligent, preventive.',
+    subtitle: 'This usually takes a few seconds.',
     error: {
-      headline: "We could not reach Eunoia's analysis just now.",
-      subtitle: 'Try again, or come back when your connection is steady.',
-      retryLabel: 'Retry',
+      headline: 'Could not reach the analysis service',
+      subtitle: 'Check your connection, then try again.',
+      retryLabel: 'Try again',
       cancelLabel: 'Cancel',
     },
   },
 
   result: {
     eyebrow: 'Your Eunoia profile',
-    wellnessLabel: 'Wellness score',
+    // The headline number is the risk score: the component bars and the
+    // drivers listed under it are risk points that add up to it.
+    scoreLabel: 'Risk score',
+    scoreOutOf: 'out of 100 · lower is better',
     riskLabel: 'Risk level',
     aiUnavailableMessage:
-      'Your personalized AI insights will be retried later. Your risk indicators are ready.',
+      'Your risk indicators are ready. Personalised insights could not load and will be retried later.',
     sections: {
       preventiveInsights: 'Preventive insights',
       lifestyleOptimization: 'Lifestyle optimization',
@@ -284,9 +286,9 @@ export const ONBOARDING_COPY = {
       habitOptimization: 'Habit optimization',
       trendPlaceholder: 'Trend insights coming soon',
     },
-    primaryCta: 'Return to home',
+    primaryCta: 'Go to home',
     saveErrorMessage:
-      'We could not save your report just now. Tap to retry.',
+      'Your report was not saved. Tap to try again.',
   },
 } as const;
 

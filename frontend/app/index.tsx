@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, ActivityIndicator, StyleSheet, Animated, Easing, Text, Image } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Animated, Easing, Text } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../contexts/AuthContext';
-import { colors, typography } from '../constants/theme';
+import { colors, spacing, typography } from '../constants/theme';
+import { BrandMark } from '../components/ui';
 import { loadDraft } from '../utils/onboardingDraft';
 
 export default function Index() {
@@ -76,9 +77,8 @@ export default function Index() {
   return (
     <View style={styles.container}>
       <Animated.View style={[styles.welcomeContainer, { opacity, transform: [{ translateY }] }]}>
-        <Image source={require('../assets/images/icon.png')} style={styles.logo} />
-        <Text style={styles.title}>Eunoia</Text>
-        <Text style={styles.tagline}>Personalised insights, calmly delivered.</Text>
+        <BrandMark size={52} />
+        <Text style={styles.tagline}>Preventive health, made personal.</Text>
       </Animated.View>
 
       <View style={styles.loaderContainer}>
@@ -104,24 +104,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  logo: {
-    width: 72,
-    height: 72,
-    marginBottom: 20,
-    borderRadius: 16,
-  },
-  title: {
-    ...typography.largeTitle,
-    color: colors.textPrimary,
-  },
-  titleAccent: {
-    color: colors.accent,
-  },
   tagline: {
-    ...typography.caption,
-    color: colors.textTertiary,
-    marginTop: 8,
-    letterSpacing: 0.4,
+    ...typography.callout,
+    color: colors.textSecondary,
+    marginTop: spacing.lg,
   },
   loaderContainer: {
     position: 'absolute',

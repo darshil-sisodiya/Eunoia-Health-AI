@@ -9,6 +9,7 @@ import {
 
 import OnboardingShell from '../../components/onboarding/OnboardingShell';
 import ChoiceCard from '../../components/onboarding/ChoiceCard';
+import { Notice } from '../../components/ui';
 import {
   LIFESTYLE_QUESTIONS,
   ONBOARDING_COPY,
@@ -19,32 +20,22 @@ import type { Lifestyle } from '../../utils/onboardingApi';
 import { colors, spacing, typography } from '../../constants/theme';
 
 /**
- * Step 3 of the Eunoia onboarding flow — the Lifestyle Analysis screen.
+ * Lifestyle: six single-choice questions paced one at a time inside a single
+ * onboarding step.
  *
- * Visual contract (Requirements 4.1–4.9, 16.1–16.3, 16.5):
- *   - Renders the six lifestyle sub-questions inside `OnboardingShell`
- *     (step = 3) with the global step indicator pinned at `03 / 07`.
- *   - Each sub-question shows the question copy in `typography.largeTitle`
- *     and uses `ChoiceCard` rows for its enum options. The eyebrow is
- *     supplied to the shell as `Lifestyle · NN / 06`.
- *   - A 2 px inner progress bar above the question advances `(subIndex+1)/6`
- *     using `Animated.timing` over 200 ms; the track is `colors.divider`
- *     and the fill `colors.textPrimary`, mirroring the shell progress style.
+ *   - The shell's segmented bar tracks the step; the eyebrow carries the
+ *     inner count ("Lifestyle, question 2 of 6") so there is one progress
+ *     bar on screen, not two.
  *   - Sub-question transitions cross-fade for 200 ms (opacity only).
- *   - `canAdvance` stays `true` so the user can attempt to advance and see
- *     the inline prompt "Select an option to continue." (`colors.error`,
- *     `typography.caption`) when they have not yet picked an option.
- *
- * All values come from `frontend/constants/theme.ts` and
- * `frontend/constants/onboarding.ts`; no inline color, spacing, or
- * typography literals.
+ *   - `canAdvance` stays `true` so advancing without an answer shows the
+ *     inline prompt instead of a dead button.
  */
 export default function LifestyleScreen() {
   const { draft, setLifestyle, step, totalSteps, goNext, goBack } =
     useOnboardingStep('lifestyle');
 
-  // Local index over the six lifestyle sub-questions. The global step
-  // indicator stays at `03 / 07`; this is the inner pacing.
+  // Local index over the six lifestyle sub-questions; the shell's step
+  // count does not move while these advance.
   const [subIndex, setSubIndex] = useState(0);
   const [attemptedAdvance, setAttemptedAdvance] = useState(false);
 
@@ -52,11 +43,7 @@ export default function LifestyleScreen() {
   // through its 200 ms fade-out before being replaced by the new one.
   const [displayedIndex, setDisplayedIndex] = useState(0);
 
-  // Animated drivers (200 ms each).
   const fadeOpacity = useRef(new Animated.Value(1)).current;
-  const innerProgress = useRef(
-    new Animated.Value(initialProgress(0)),
-  ).current;
 
   // Cross-fade between sub-questions: opacity 1→0 (200 ms), swap children,
   // opacity 0→1 (200 ms). The displayed index updates between the two
@@ -83,18 +70,6 @@ export default function LifestyleScreen() {
       cancelled = true;
     };
   }, [subIndex, displayedIndex, fadeOpacity]);
-
-  // Inner progress bar tracks `subIndex` directly (the new bar width is
-  // visible during the cross-fade so progress feels responsive).
-  useEffect(() => {
-    Animated.timing(innerProgress, {
-      toValue: progressFor(subIndex),
-      duration: 200,
-      easing: Easing.out(Easing.cubic),
-      // Width is not animatable on the native driver.
-      useNativeDriver: false,
-    }).start();
-  }, [subIndex, innerProgress]);
 
   const currentQuestion = LIFESTYLE_QUESTIONS[displayedIndex];
   const selectedValue = readLifestyleValue(draft.lifestyle, currentQuestion.id);
@@ -140,42 +115,18 @@ export default function LifestyleScreen() {
     goBack();
   };
 
-  const fillWidth = innerProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0%', '100%'],
-  });
-  const subIndicatorLabel = `Sub-question ${subIndex + 1} of ${LIFESTYLE_QUESTIONS.length}`;
+  const eyebrow = `${currentQuestion.eyebrow}, question ${displayedIndex + 1} of ${LIFESTYLE_QUESTIONS.length}`;
 
   return (
     <OnboardingShell
       step={step}
       totalSteps={totalSteps}
-      eyebrow={currentQuestion.eyebrow}
+      eyebrow={eyebrow}
       canAdvance
       onBack={handleBack}
       onAdvance={handleAdvance}
       advanceLabel={ONBOARDING_COPY.lifestyle.advanceLabel}
     >
-      {/* ── Inner progress bar (1/6 .. 6/6) ─────────────── */}
-      <View style={styles.innerProgressContainer}>
-        <View
-          style={styles.innerProgressTrack}
-          accessible
-          accessibilityRole="progressbar"
-          accessibilityLabel={subIndicatorLabel}
-          accessibilityValue={{
-            min: 0,
-            max: LIFESTYLE_QUESTIONS.length,
-            now: subIndex + 1,
-          }}
-        >
-          <Animated.View
-            style={[styles.innerProgressFill, { width: fillWidth }]}
-          />
-        </View>
-      </View>
-
-      {/* ── Cross-faded sub-question body ───────────────── */}
       <Animated.View style={[styles.sub, { opacity: fadeOpacity }]}>
         <Text style={styles.question} accessibilityRole="header">
           {currentQuestion.question}
@@ -193,12 +144,9 @@ export default function LifestyleScreen() {
         </View>
 
         {showUnansweredPrompt ? (
-          <Text
-            style={styles.unansweredPrompt}
-            accessibilityLiveRegion="polite"
-          >
-            {ONBOARDING_COPY.lifestyle.unansweredPrompt}
-          </Text>
+          <View style={styles.unansweredPrompt}>
+            <Notice>{ONBOARDING_COPY.lifestyle.unansweredPrompt}</Notice>
+          </View>
         ) : null}
       </Animated.View>
     </OnboardingShell>
@@ -206,15 +154,6 @@ export default function LifestyleScreen() {
 }
 
 // ── helpers ──────────────────────────────────────────────────────
-
-function progressFor(subIndex: number): number {
-  const total = LIFESTYLE_QUESTIONS.length;
-  return Math.min(1, Math.max(0, (subIndex + 1) / total));
-}
-
-function initialProgress(subIndex: number): number {
-  return progressFor(subIndex);
-}
 
 /**
  * Reads the field stored in the in-flight draft for the given sub-question
@@ -229,19 +168,6 @@ function readLifestyleValue(
 }
 
 const styles = StyleSheet.create({
-  innerProgressContainer: {
-    marginBottom: spacing.xl,
-  },
-  innerProgressTrack: {
-    height: 2,
-    backgroundColor: colors.divider,
-    borderRadius: 1,
-    overflow: 'hidden',
-  },
-  innerProgressFill: {
-    height: '100%',
-    backgroundColor: colors.textPrimary,
-  },
   sub: {
     flex: 1,
   },
@@ -251,11 +177,9 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xxl,
   },
   options: {
-    gap: spacing.md,
+    gap: spacing.sm,
   },
   unansweredPrompt: {
-    ...typography.caption,
-    color: colors.error,
     marginTop: spacing.lg,
   },
 });

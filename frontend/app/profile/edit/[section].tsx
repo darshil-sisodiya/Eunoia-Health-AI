@@ -1,13 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -15,7 +7,8 @@ import NumberOrUnknown from '../../../components/onboarding/NumberOrUnknown';
 import NumberField from '../../../components/onboarding/NumberField';
 import SegmentedRow from '../../../components/onboarding/SegmentedRow';
 import KeyboardAwareScreenScrollView from '../../../components/KeyboardAwareScreenScrollView';
-import { colors, spacing, typography } from '../../../constants/theme';
+import { colors, fonts, spacing, typography } from '../../../constants/theme';
+import { Button, Notice, ScreenHeader } from '../../../components/ui';
 import { useHealthProfile } from '../../../contexts/HealthProfileContext';
 import {
   AllergiesEditor,
@@ -281,335 +274,312 @@ export default function EditSection() {
       await patch(String(section), body);
       router.back();
     } catch (err: any) {
-      setError(err?.response?.data?.detail || 'Could not save. Please try again.');
+      setError(err?.response?.data?.detail || 'Your changes were not saved. Check your connection and try again.');
     } finally {
       setSaving(false);
     }
   }, [section, vitals, screening, insurance, conditions, medications, allergies,
       lifestyle, mental, family, patch]);
 
+  const editable = EDITABLE_SECTIONS.has(String(section));
+
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-          style={styles.backButton}
-        >
-          <Ionicons name="chevron-back" size={22} color={colors.textPrimary} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>
-          {meta.title}
-        </Text>
-        <View style={styles.backButton} />
-      </View>
-
-      <KeyboardAwareScreenScrollView>
-        {meta.body ? <Text style={styles.intro}>{meta.body}</Text> : null}
-
-        {section === 'vitals'
-          ? VITAL_ROWS.map((row) => (
-              <NumberOrUnknown
-                key={row.key}
-                label={row.label}
-                unit={row.unit}
-                normal={row.normal}
-                value={vitals[row.key] as number | null | undefined}
-                unknown={unknownSet.has(row.key)}
-                onChangeValue={(value) =>
-                  setVitals((current) => ({
-                    ...current,
-                    [row.key]: value,
-                    declared_unknown: (current.declared_unknown ?? []).filter(
-                      (k) => k !== row.key,
-                    ),
-                  }))
-                }
-                onToggleUnknown={() =>
-                  setVitals((current) => {
-                    const declared = current.declared_unknown ?? [];
-                    const on = declared.includes(row.key);
-                    return {
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <KeyboardAwareScreenScrollView contentContainerStyle={styles.scroll}>
+        <ScreenHeader title={meta.title} subtitle={meta.body || undefined} />
+        <View style={styles.body}>
+          {section === 'vitals'
+            ? VITAL_ROWS.map((row) => (
+                <NumberOrUnknown
+                  key={row.key}
+                  label={row.label}
+                  unit={row.unit}
+                  normal={row.normal}
+                  value={vitals[row.key] as number | null | undefined}
+                  unknown={unknownSet.has(row.key)}
+                  onChangeValue={(value) =>
+                    setVitals((current) => ({
                       ...current,
-                      [row.key]: on ? current[row.key] : null,
-                      declared_unknown: on
-                        ? declared.filter((k) => k !== row.key)
-                        : [...declared, row.key],
-                    };
-                  })
-                }
-              />
-            ))
-          : null}
+                      [row.key]: value,
+                      declared_unknown: (current.declared_unknown ?? []).filter(
+                        (k) => k !== row.key,
+                      ),
+                    }))
+                  }
+                  onToggleUnknown={() =>
+                    setVitals((current) => {
+                      const declared = current.declared_unknown ?? [];
+                      const on = declared.includes(row.key);
+                      return {
+                        ...current,
+                        [row.key]: on ? current[row.key] : null,
+                        declared_unknown: on
+                          ? declared.filter((k) => k !== row.key)
+                          : [...declared, row.key],
+                      };
+                    })
+                  }
+                />
+              ))
+            : null}
 
-        {section === 'screening' ? (
-          <>
-            <SegmentedRow
-              label="Last blood pressure check"
-              options={RECENCY}
-              value={screening.last_bp_check ?? null}
-              onChange={(v) => setScreening({ ...screening, last_bp_check: v })}
-            />
-            <SegmentedRow
-              label="Last blood sugar test"
-              options={RECENCY}
-              value={screening.last_blood_sugar ?? null}
-              onChange={(v) => setScreening({ ...screening, last_blood_sugar: v })}
-            />
-            <SegmentedRow
-              label="Last cholesterol panel"
-              options={RECENCY}
-              value={screening.last_lipid_panel ?? null}
-              onChange={(v) => setScreening({ ...screening, last_lipid_panel: v })}
-            />
-            <SegmentedRow
-              label="Last dental visit"
-              options={RECENCY}
-              value={screening.last_dental ?? null}
-              onChange={(v) => setScreening({ ...screening, last_dental: v })}
-            />
-            <SegmentedRow
-              label="Last eye examination"
-              options={RECENCY}
-              value={screening.last_eye_exam ?? null}
-              onChange={(v) => setScreening({ ...screening, last_eye_exam: v })}
-            />
-            <SegmentedRow
-              label="Last full health check-up"
-              options={RECENCY}
-              value={screening.last_full_checkup ?? null}
-              onChange={(v) => setScreening({ ...screening, last_full_checkup: v })}
-            />
-          </>
-        ) : null}
-
-        {section === 'insurance' ? (
-          <>
-            <SegmentedRow
-              label="Do you have health insurance?"
-              options={[
-                { value: 'yes', label: 'Yes' },
-                { value: 'no', label: 'No' },
-              ]}
-              value={
-                insurance.has_insurance === null || insurance.has_insurance === undefined
-                  ? null
-                  : insurance.has_insurance
-                    ? 'yes'
-                    : 'no'
-              }
-              onChange={(v) => setInsurance({ ...insurance, has_insurance: v === 'yes' })}
-            />
-            {insurance.has_insurance ? (
+          {section === 'screening' ? (
+            <>
               <SegmentedRow
-                label="Roughly how much cover?"
+                label="Last blood pressure check"
+                options={RECENCY}
+                value={screening.last_bp_check ?? null}
+                onChange={(v) => setScreening({ ...screening, last_bp_check: v })}
+              />
+              <SegmentedRow
+                label="Last blood sugar test"
+                options={RECENCY}
+                value={screening.last_blood_sugar ?? null}
+                onChange={(v) => setScreening({ ...screening, last_blood_sugar: v })}
+              />
+              <SegmentedRow
+                label="Last cholesterol panel"
+                options={RECENCY}
+                value={screening.last_lipid_panel ?? null}
+                onChange={(v) => setScreening({ ...screening, last_lipid_panel: v })}
+              />
+              <SegmentedRow
+                label="Last dental visit"
+                options={RECENCY}
+                value={screening.last_dental ?? null}
+                onChange={(v) => setScreening({ ...screening, last_dental: v })}
+              />
+              <SegmentedRow
+                label="Last eye examination"
+                options={RECENCY}
+                value={screening.last_eye_exam ?? null}
+                onChange={(v) => setScreening({ ...screening, last_eye_exam: v })}
+              />
+              <SegmentedRow
+                label="Last full health check-up"
+                options={RECENCY}
+                value={screening.last_full_checkup ?? null}
+                onChange={(v) => setScreening({ ...screening, last_full_checkup: v })}
+              />
+            </>
+          ) : null}
+
+          {section === 'insurance' ? (
+            <>
+              <SegmentedRow
+                label="Do you have health insurance?"
                 options={[
-                  { value: 'lt_2l', label: 'Under 2L' },
-                  { value: '2_5l', label: '2-5L' },
-                  { value: '5_10l', label: '5-10L' },
-                  { value: '10_25l', label: '10-25L' },
-                  { value: 'gt_25l', label: '25L+' },
-                  { value: 'unsure', label: 'Not sure' },
+                  { value: 'yes', label: 'Yes' },
+                  { value: 'no', label: 'No' },
                 ]}
-                value={insurance.sum_insured_band ?? null}
-                onChange={(v) => setInsurance({ ...insurance, sum_insured_band: v })}
-              />
-            ) : null}
-            <SegmentedRow
-              label="What could you comfortably pay yourself?"
-              hint="Used only to suggest a hospital tier in the cost estimator."
-              options={[
-                { value: 'lt_5k', label: 'Under 5k' },
-                { value: '5_25k', label: '5-25k' },
-                { value: '25_1l', label: '25k-1L' },
-                { value: 'gt_1l', label: '1L+' },
-              ]}
-              value={insurance.out_of_pocket_band ?? null}
-              onChange={(v) => setInsurance({ ...insurance, out_of_pocket_band: v })}
-            />
-            <SegmentedRow
-              label="Do you have a regular doctor?"
-              options={[
-                { value: 'yes', label: 'Yes' },
-                { value: 'no', label: 'No' },
-              ]}
-              value={
-                insurance.has_regular_doctor === null ||
-                insurance.has_regular_doctor === undefined
-                  ? null
-                  : insurance.has_regular_doctor
-                    ? 'yes'
-                    : 'no'
-              }
-              onChange={(v) =>
-                setInsurance({ ...insurance, has_regular_doctor: v === 'yes' })
-              }
-            />
-          </>
-        ) : null}
-
-        {section === 'conditions' ? (
-          <ConditionsEditor value={conditions} onChange={setConditions} />
-        ) : null}
-
-        {section === 'medications' ? (
-          <MedicationsEditor
-            value={medications}
-            onChange={setMedications}
-            conditionNames={conditions.map((c) => c.name)}
-          />
-        ) : null}
-
-        {section === 'allergies' ? (
-          <AllergiesEditor value={allergies} onChange={setAllergies} />
-        ) : null}
-
-        {section === 'lifestyle' ? (
-          <>
-            <NumberField
-              label="Hours of sleep on a typical night"
-              value={lifestyle.sleep_hours}
-              onChange={(v) => setLifestyle({ ...lifestyle, sleep_hours: v })}
-              unit="hours"
-            />
-            <NumberField
-              label="Minutes of exercise per week"
-              value={lifestyle.exercise_minutes_per_week}
-              onChange={(v) => setLifestyle({ ...lifestyle, exercise_minutes_per_week: v })}
-              unit="minutes"
-            />
-            <NumberField
-              label="Hours sitting per day"
-              value={lifestyle.sedentary_hours_per_day}
-              onChange={(v) => setLifestyle({ ...lifestyle, sedentary_hours_per_day: v })}
-              unit="hours"
-            />
-            <NumberField
-              label="Alcohol units per week"
-              value={lifestyle.alcohol_units_per_week}
-              onChange={(v) => setLifestyle({ ...lifestyle, alcohol_units_per_week: v })}
-              unit="units"
-            />
-            <NumberField
-              label="Cigarettes per day"
-              value={lifestyle.cigarettes_per_day}
-              onChange={(v) => setLifestyle({ ...lifestyle, cigarettes_per_day: v })}
-              unit="per day"
-            />
-            <NumberField
-              label="Years you have smoked"
-              value={lifestyle.smoking_years}
-              onChange={(v) => setLifestyle({ ...lifestyle, smoking_years: v })}
-              unit="years"
-            />
-            <NumberField
-              label="Servings of fruit and vegetables per day"
-              value={lifestyle.fruit_veg_servings}
-              onChange={(v) => setLifestyle({ ...lifestyle, fruit_veg_servings: v })}
-              unit="servings"
-            />
-            <SegmentedRow
-              label="How do you eat?"
-              options={[
-                { value: 'vegetarian', label: 'Vegetarian' },
-                { value: 'vegan', label: 'Vegan' },
-                { value: 'eggetarian', label: 'Eggetarian' },
-                { value: 'non_vegetarian', label: 'Non-vegetarian' },
-              ]}
-              value={lifestyle.diet_type ?? null}
-              onChange={(v) => setLifestyle({ ...lifestyle, diet_type: v })}
-            />
-            <SegmentedRow
-              label="Do you use any smokeless tobacco?"
-              hint="Gutka, paan masala, khaini, zarda."
-              options={[
-                { value: 'never', label: 'Never' },
-                { value: 'former', label: 'Used to' },
-                { value: 'occasional', label: 'Occasionally' },
-                { value: 'daily', label: 'Daily' },
-              ]}
-              value={lifestyle.smokeless_tobacco ?? null}
-              onChange={(v) => setLifestyle({ ...lifestyle, smokeless_tobacco: v })}
-            />
-            <SegmentedRow
-              label="What do you cook with?"
-              hint="Solid fuels affect long-term lung health."
-              options={[
-                { value: 'lpg', label: 'LPG' },
-                { value: 'electric', label: 'Electric' },
-                { value: 'biomass', label: 'Wood/biomass' },
-                { value: 'kerosene', label: 'Kerosene' },
-                { value: 'mixed', label: 'Mixed' },
-              ]}
-              value={lifestyle.cooking_fuel ?? null}
-              onChange={(v) => setLifestyle({ ...lifestyle, cooking_fuel: v })}
-            />
-          </>
-        ) : null}
-
-        {section === 'mental' ? (
-          <>
-            <Text style={styles.intro}>
-              Over the last two weeks, how often have you been bothered by…
-            </Text>
-            {MENTAL_QUESTIONS.map((question) => (
-              <SegmentedRow
-                key={String(question.key)}
-                label={question.text}
-                options={FREQUENCY_OPTIONS}
                 value={
-                  mental[question.key] === null || mental[question.key] === undefined
+                  insurance.has_insurance === null || insurance.has_insurance === undefined
                     ? null
-                    : String(mental[question.key])
+                    : insurance.has_insurance
+                      ? 'yes'
+                      : 'no'
                 }
-                onChange={(v) => setMental({ ...mental, [question.key]: Number(v) })}
+                onChange={(v) => setInsurance({ ...insurance, has_insurance: v === 'yes' })}
               />
-            ))}
-            <Text style={styles.footnote}>
-              These are recognised screening questions, not a diagnosis.
-            </Text>
-          </>
-        ) : null}
+              {insurance.has_insurance ? (
+                <SegmentedRow
+                  label="Roughly how much cover?"
+                  options={[
+                    { value: 'lt_2l', label: 'Under 2L' },
+                    { value: '2_5l', label: '2-5L' },
+                    { value: '5_10l', label: '5-10L' },
+                    { value: '10_25l', label: '10-25L' },
+                    { value: 'gt_25l', label: '25L+' },
+                    { value: 'unsure', label: 'Not sure' },
+                  ]}
+                  value={insurance.sum_insured_band ?? null}
+                  onChange={(v) => setInsurance({ ...insurance, sum_insured_band: v })}
+                />
+              ) : null}
+              <SegmentedRow
+                label="What could you comfortably pay yourself?"
+                hint="Used only to suggest a hospital tier in the cost estimator."
+                options={[
+                  { value: 'lt_5k', label: 'Under 5k' },
+                  { value: '5_25k', label: '5-25k' },
+                  { value: '25_1l', label: '25k-1L' },
+                  { value: 'gt_1l', label: '1L+' },
+                ]}
+                value={insurance.out_of_pocket_band ?? null}
+                onChange={(v) => setInsurance({ ...insurance, out_of_pocket_band: v })}
+              />
+              <SegmentedRow
+                label="Do you have a regular doctor?"
+                options={[
+                  { value: 'yes', label: 'Yes' },
+                  { value: 'no', label: 'No' },
+                ]}
+                value={
+                  insurance.has_regular_doctor === null ||
+                  insurance.has_regular_doctor === undefined
+                    ? null
+                    : insurance.has_regular_doctor
+                      ? 'yes'
+                      : 'no'
+                }
+                onChange={(v) =>
+                  setInsurance({ ...insurance, has_regular_doctor: v === 'yes' })
+                }
+              />
+            </>
+          ) : null}
 
-        {section === 'family' ? (
-          <FamilyEditor
-            value={family}
-            onChange={setFamily}
-            openSections={openSections}
-            toggleSection={toggleSection}
-          />
-        ) : null}
+          {section === 'conditions' ? (
+            <ConditionsEditor value={conditions} onChange={setConditions} />
+          ) : null}
 
-        {/* Defensive: a section with no editor would otherwise render an
-            empty page with a Save button that silently does nothing. */}
-        {!EDITABLE_SECTIONS.has(String(section)) ? (
-          <Text style={styles.error}>
-            This part of your profile is set during onboarding. Open Profile and
-            choose &quot;Update health profile&quot; to change it.
-          </Text>
-        ) : null}
+          {section === 'medications' ? (
+            <MedicationsEditor
+              value={medications}
+              onChange={setMedications}
+              conditionNames={conditions.map((c) => c.name)}
+            />
+          ) : null}
 
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+          {section === 'allergies' ? (
+            <AllergiesEditor value={allergies} onChange={setAllergies} />
+          ) : null}
 
-        <TouchableOpacity
-          style={[styles.save, saving && styles.saveDisabled]}
-          onPress={save}
-          disabled={saving || !EDITABLE_SECTIONS.has(String(section))}
-          accessibilityRole="button"
-          accessibilityLabel="Save"
-        >
-          {saving ? (
-            <ActivityIndicator color={colors.textInverse} />
+          {section === 'lifestyle' ? (
+            <>
+              <NumberField
+                label="Hours of sleep on a typical night"
+                value={lifestyle.sleep_hours}
+                onChange={(v) => setLifestyle({ ...lifestyle, sleep_hours: v })}
+                unit="hours"
+              />
+              <NumberField
+                label="Minutes of exercise per week"
+                value={lifestyle.exercise_minutes_per_week}
+                onChange={(v) => setLifestyle({ ...lifestyle, exercise_minutes_per_week: v })}
+                unit="minutes"
+              />
+              <NumberField
+                label="Hours sitting per day"
+                value={lifestyle.sedentary_hours_per_day}
+                onChange={(v) => setLifestyle({ ...lifestyle, sedentary_hours_per_day: v })}
+                unit="hours"
+              />
+              <NumberField
+                label="Alcohol units per week"
+                value={lifestyle.alcohol_units_per_week}
+                onChange={(v) => setLifestyle({ ...lifestyle, alcohol_units_per_week: v })}
+                unit="units"
+              />
+              <NumberField
+                label="Cigarettes per day"
+                value={lifestyle.cigarettes_per_day}
+                onChange={(v) => setLifestyle({ ...lifestyle, cigarettes_per_day: v })}
+                unit="per day"
+              />
+              <NumberField
+                label="Years you have smoked"
+                value={lifestyle.smoking_years}
+                onChange={(v) => setLifestyle({ ...lifestyle, smoking_years: v })}
+                unit="years"
+              />
+              <NumberField
+                label="Servings of fruit and vegetables per day"
+                value={lifestyle.fruit_veg_servings}
+                onChange={(v) => setLifestyle({ ...lifestyle, fruit_veg_servings: v })}
+                unit="servings"
+              />
+              <SegmentedRow
+                label="How do you eat?"
+                options={[
+                  { value: 'vegetarian', label: 'Vegetarian' },
+                  { value: 'vegan', label: 'Vegan' },
+                  { value: 'eggetarian', label: 'Eggetarian' },
+                  { value: 'non_vegetarian', label: 'Non-vegetarian' },
+                ]}
+                value={lifestyle.diet_type ?? null}
+                onChange={(v) => setLifestyle({ ...lifestyle, diet_type: v })}
+              />
+              <SegmentedRow
+                label="Do you use any smokeless tobacco?"
+                hint="Gutka, paan masala, khaini, zarda."
+                options={[
+                  { value: 'never', label: 'Never' },
+                  { value: 'former', label: 'Used to' },
+                  { value: 'occasional', label: 'Occasionally' },
+                  { value: 'daily', label: 'Daily' },
+                ]}
+                value={lifestyle.smokeless_tobacco ?? null}
+                onChange={(v) => setLifestyle({ ...lifestyle, smokeless_tobacco: v })}
+              />
+              <SegmentedRow
+                label="What do you cook with?"
+                hint="Solid fuels affect long-term lung health."
+                options={[
+                  { value: 'lpg', label: 'LPG' },
+                  { value: 'electric', label: 'Electric' },
+                  { value: 'biomass', label: 'Wood/biomass' },
+                  { value: 'kerosene', label: 'Kerosene' },
+                  { value: 'mixed', label: 'Mixed' },
+                ]}
+                value={lifestyle.cooking_fuel ?? null}
+                onChange={(v) => setLifestyle({ ...lifestyle, cooking_fuel: v })}
+              />
+            </>
+          ) : null}
+
+          {section === 'mental' ? (
+            <>
+              <Text style={styles.intro}>
+                Over the last two weeks, how often have you been bothered by…
+              </Text>
+              {MENTAL_QUESTIONS.map((question) => (
+                <SegmentedRow
+                  key={String(question.key)}
+                  label={question.text}
+                  options={FREQUENCY_OPTIONS}
+                  value={
+                    mental[question.key] === null || mental[question.key] === undefined
+                      ? null
+                      : String(mental[question.key])
+                  }
+                  onChange={(v) => setMental({ ...mental, [question.key]: Number(v) })}
+                />
+              ))}
+              <Text style={styles.footnote}>
+                These are recognised screening questions, not a diagnosis.
+              </Text>
+            </>
+          ) : null}
+
+          {section === 'family' ? (
+            <FamilyEditor
+              value={family}
+              onChange={setFamily}
+              openSections={openSections}
+              toggleSection={toggleSection}
+            />
+          ) : null}
+
+          {/* Defensive: a section with no editor would otherwise render an
+              empty page with a Save button that silently does nothing. */}
+          {!editable ? (
+            <Notice tone="info">
+              This part of your profile is set during onboarding. To change it, open Profile and
+              choose Retake health questionnaire.
+            </Notice>
           ) : (
-            <Text style={styles.saveLabel}>Save</Text>
+            <Text style={styles.footnote}>
+              Saving recalculates your risk assessment straight away.
+            </Text>
           )}
-        </TouchableOpacity>
-
-        <Text style={styles.footnote}>
-          Saving recalculates your risk assessment straight away.
-        </Text>
+        </View>
       </KeyboardAwareScreenScrollView>
+
+      <View style={styles.dock}>
+        {error ? <Notice>{error}</Notice> : null}
+        <Button label="Save changes" onPress={save} loading={saving} disabled={!editable} />
+      </View>
     </SafeAreaView>
   );
 }
@@ -630,54 +600,32 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.md,
+  scroll: {
+    paddingBottom: spacing.xxl,
   },
-  backButton: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerTitle: {
-    ...typography.headline,
-    color: colors.textPrimary,
-    flex: 1,
-    textAlign: 'center',
+  body: {
+    paddingHorizontal: spacing.screenPadding,
   },
   intro: {
-    ...typography.callout,
-    color: colors.textSecondary,
-    marginBottom: spacing.xl,
-  },
-  error: {
-    ...typography.caption,
-    color: colors.error,
-    marginBottom: spacing.md,
-  },
-  save: {
-    paddingVertical: spacing.lg,
-    borderRadius: spacing.buttonRadius,
-    backgroundColor: colors.inkSurface,
-    alignItems: 'center',
-    marginTop: spacing.lg,
-  },
-  saveDisabled: {
-    opacity: 0.6,
-  },
-  saveLabel: {
-    ...typography.headline,
-    color: colors.textInverse,
+    ...typography.body,
+    fontFamily: fonts.medium,
+    color: colors.textPrimary,
+    marginBottom: spacing.lg,
   },
   footnote: {
     ...typography.caption,
     color: colors.textTertiary,
     textAlign: 'center',
-    marginTop: spacing.md,
-    marginBottom: spacing.xxl,
+    marginTop: spacing.lg,
+  },
+  // Save stays in reach however long the section is.
+  dock: {
+    gap: spacing.md,
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
+    backgroundColor: colors.background,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.divider,
   },
 });

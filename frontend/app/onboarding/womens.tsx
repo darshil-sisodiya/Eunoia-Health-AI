@@ -36,12 +36,15 @@ export default function WomensScreen() {
       onAdvance={goNext}
       advanceLabel="Continue"
     >
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scroll}
+      >
         <Text style={styles.headline} accessibilityRole="header">
-          A few questions specific to you
+          Questions about your cycle and screenings
         </Text>
         <Text style={styles.subtitle}>
-          Skip anything you would rather not answer — it will not block your
+          Skip anything you would rather not answer. It will not hold up your
           result.
         </Text>
 
@@ -114,13 +117,16 @@ export default function WomensScreen() {
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    paddingBottom: spacing.xl,
+  },
   headline: {
     ...typography.largeTitle,
     color: colors.textPrimary,
     marginBottom: spacing.md,
   },
   subtitle: {
-    ...typography.callout,
+    ...typography.body,
     color: colors.textSecondary,
     marginBottom: spacing.xxl,
   },

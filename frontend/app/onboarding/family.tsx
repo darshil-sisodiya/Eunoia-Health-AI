@@ -36,7 +36,7 @@ export default function Family() {
       onBack={goBack}
       advanceLabel={ONBOARDING_COPY.family.advanceLabel}
     >
-      <KeyboardAwareScreenScrollView>
+      <KeyboardAwareScreenScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.headline} accessibilityRole="header">
           {ONBOARDING_COPY.family.headline}
         </Text>
@@ -54,13 +54,16 @@ export default function Family() {
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    paddingBottom: spacing.xl,
+  },
   headline: {
     ...typography.largeTitle,
     color: colors.textPrimary,
     marginBottom: spacing.md,
   },
   supporting: {
-    ...typography.callout,
+    ...typography.body,
     color: colors.textSecondary,
     marginBottom: spacing.xxl,
   },

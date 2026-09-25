@@ -1,48 +1,48 @@
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
+import React, { useRef, useState } from 'react';
+import { View, Text, StyleSheet, TextInput, Pressable } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../contexts/AuthContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import KeyboardAwareScreenScrollView from '../../components/KeyboardAwareScreenScrollView';
-import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, shadows, typography } from '../../constants/theme';
+import { BrandMark, Button, Notice, TextField } from '../../components/ui';
+import { colors, fonts, spacing, typography } from '../../constants/theme';
 
 export default function Register() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [focused, setFocused] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const passwordRef = useRef<TextInput>(null);
+  const confirmRef = useRef<TextInput>(null);
   const { register } = useAuth();
   const router = useRouter();
 
+  const edit = (setter: (t: string) => void) => (t: string) => {
+    setter(t);
+    if (error) setError(null);
+  };
+
   const handleRegister = async () => {
     if (!username.trim() || !password.trim() || !confirmPassword.trim()) {
-      Alert.alert('Missing fields', 'Please fill in all fields');
+      setError('Fill in all three fields to create your account.');
       return;
     }
     if (password !== confirmPassword) {
-      Alert.alert('Mismatch', 'Passwords do not match');
+      setError('The passwords do not match. Type the same password twice.');
       return;
     }
     if (password.length < 6) {
-      Alert.alert('Too short', 'Password must be at least 6 characters');
+      setError('Use a password of at least 6 characters.');
       return;
     }
+    setError(null);
     setIsLoading(true);
     try {
       await register(username.trim(), password);
       router.replace('/onboarding/welcome');
-    } catch (error: any) {
-      Alert.alert('Registration failed', error.message);
+    } catch (e: any) {
+      setError(e?.message || 'Could not create your account. Try again in a moment.');
     } finally {
       setIsLoading(false);
     }
@@ -50,112 +50,82 @@ export default function Register() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAwareScreenScrollView
-        contentContainerStyle={styles.scrollContent}
-      >
-        <View style={styles.header}>
-          <View style={styles.brandRow}>
-            <View style={styles.brandDot} />
-            <Text style={styles.brandText}>EUNOIA</Text>
-          </View>
+      <KeyboardAwareScreenScrollView contentContainerStyle={styles.scrollContent}>
+        <BrandMark />
 
-          <Text style={styles.eyebrow}>Create account</Text>
-          <Text style={styles.title}>Begin your{"\n"}journey.</Text>
+        <View style={styles.header}>
+          <Text style={styles.title} accessibilityRole="header">
+            Create your account
+          </Text>
           <Text style={styles.subtitle}>
-            A premium AI health companion built for clarity, depth, and trust.
+            Pick a username and password. Next, a few questions build your health profile.
           </Text>
         </View>
 
         <View style={styles.form}>
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Username</Text>
-            <View style={[styles.inputContainer, focused === 'username' && styles.inputContainerFocused]}>
-              <Ionicons name="person-outline" size={18} color={colors.textTertiary} />
-              <TextInput
-                style={styles.input}
-                placeholder="yourname"
-                placeholderTextColor={colors.textMuted}
-                value={username}
-                onChangeText={setUsername}
-                autoCapitalize="none"
-                editable={!isLoading}
-                onFocus={() => setFocused('username')}
-                onBlur={() => setFocused(null)}
-              />
-            </View>
-          </View>
+          <TextField
+            label="Username"
+            icon="person-outline"
+            placeholder="Choose a username"
+            value={username}
+            onChangeText={edit(setUsername)}
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoComplete="username-new"
+            textContentType="username"
+            returnKeyType="next"
+            onSubmitEditing={() => passwordRef.current?.focus()}
+            submitBehavior="submit"
+            editable={!isLoading}
+          />
+          <TextField
+            ref={passwordRef}
+            label="Password"
+            icon="lock-closed-outline"
+            placeholder="At least 6 characters"
+            password
+            value={password}
+            onChangeText={edit(setPassword)}
+            autoCapitalize="none"
+            autoComplete="new-password"
+            textContentType="newPassword"
+            returnKeyType="next"
+            onSubmitEditing={() => confirmRef.current?.focus()}
+            submitBehavior="submit"
+            editable={!isLoading}
+          />
+          <TextField
+            ref={confirmRef}
+            label="Confirm password"
+            icon="lock-closed-outline"
+            placeholder="Type it again"
+            password
+            value={confirmPassword}
+            onChangeText={edit(setConfirmPassword)}
+            autoCapitalize="none"
+            autoComplete="new-password"
+            textContentType="newPassword"
+            returnKeyType="go"
+            onSubmitEditing={handleRegister}
+            editable={!isLoading}
+          />
 
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Password</Text>
-            <View style={[styles.inputContainer, focused === 'password' && styles.inputContainerFocused]}>
-              <Ionicons name="lock-closed-outline" size={18} color={colors.textTertiary} />
-              <TextInput
-                style={styles.input}
-                placeholder="At least 6 characters"
-                placeholderTextColor={colors.textMuted}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                editable={!isLoading}
-                onFocus={() => setFocused('password')}
-                onBlur={() => setFocused(null)}
-              />
-            </View>
-          </View>
+          {error ? <Notice>{error}</Notice> : null}
 
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Confirm password</Text>
-            <View style={[styles.inputContainer, focused === 'confirm' && styles.inputContainerFocused]}>
-              <Ionicons name="lock-closed-outline" size={18} color={colors.textTertiary} />
-              <TextInput
-                style={styles.input}
-                placeholder="Repeat password"
-                placeholderTextColor={colors.textMuted}
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-                secureTextEntry
-                editable={!isLoading}
-                onFocus={() => setFocused('confirm')}
-                onBlur={() => setFocused(null)}
-              />
-            </View>
-          </View>
-
-          <TouchableOpacity
-            style={[styles.primaryButton, isLoading && styles.buttonDisabled]}
-            onPress={handleRegister}
-            disabled={isLoading}
-            activeOpacity={0.9}
-          >
-            {isLoading ? (
-              <ActivityIndicator color={colors.textInverse} size="small" />
-            ) : (
-              <>
-                <Text style={styles.primaryButtonText}>Create account</Text>
-                <Ionicons name="arrow-forward" size={18} color={colors.textInverse} />
-              </>
-            )}
-          </TouchableOpacity>
-
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>EXISTING USER</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          <TouchableOpacity
-            style={styles.secondaryButton}
-            onPress={() => router.push('/auth/login')}
-            disabled={isLoading}
-            activeOpacity={0.9}
-          >
-            <Text style={styles.secondaryButtonText}>Sign in</Text>
-          </TouchableOpacity>
+          <Button label="Create account" onPress={handleRegister} loading={isLoading} style={styles.submit} />
         </View>
 
-        <Text style={styles.footnote}>
-          By continuing you agree to our terms and privacy policy.
-        </Text>
+        <View style={styles.switchRow}>
+          <Text style={styles.switchText}>Already have an account?</Text>
+          <Pressable
+            onPress={() => router.push('/auth/login')}
+            disabled={isLoading}
+            hitSlop={12}
+            accessibilityRole="link"
+          >
+            <Text style={styles.switchLink}>Sign in</Text>
+          </Pressable>
+        </View>
       </KeyboardAwareScreenScrollView>
     </SafeAreaView>
   );
@@ -169,125 +139,44 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     paddingHorizontal: spacing.screenPadding,
-    paddingVertical: spacing.xxxl,
-    justifyContent: 'center',
+    paddingTop: spacing.xxxl,
+    paddingBottom: spacing.xxl,
   },
   header: {
-    marginBottom: 40,
-  },
-  brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 40,
-  },
-  brandDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.accent,
-  },
-  brandText: {
-    ...typography.overline,
-    color: colors.textPrimary,
-  },
-  eyebrow: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: 12,
+    marginTop: 56,
+    marginBottom: spacing.xxxl,
   },
   title: {
     ...typography.display,
     color: colors.textPrimary,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   subtitle: {
     ...typography.body,
     color: colors.textSecondary,
-    maxWidth: 320,
+    maxWidth: 340,
   },
   form: {
-    width: '100%',
-    gap: spacing.lg,
+    gap: spacing.xl,
   },
-  fieldGroup: {
-    gap: 8,
+  submit: {
+    marginTop: spacing.xs,
   },
-  label: {
-    ...typography.overline,
-    color: colors.textTertiary,
-  },
-  inputContainer: {
+  switchRow: {
+    marginTop: 'auto',
+    paddingTop: spacing.xxxl,
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: spacing.inputRadius,
-    paddingHorizontal: spacing.lg,
-    height: 54,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  inputContainerFocused: {
-    borderColor: colors.textPrimary,
-  },
-  input: {
-    flex: 1,
-    color: colors.textPrimary,
-    fontSize: 15,
-    letterSpacing: -0.1,
-  },
-  primaryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'center',
-    gap: 10,
-    backgroundColor: colors.inkSurface,
-    borderRadius: spacing.buttonRadius,
-    height: 54,
-    marginTop: spacing.sm,
-    ...shadows.md,
+    gap: 6,
   },
-  buttonDisabled: {
-    opacity: 0.5,
+  switchText: {
+    ...typography.callout,
+    color: colors.textSecondary,
   },
-  primaryButtonText: {
-    ...typography.headline,
-    color: colors.textInverse,
-  },
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    marginVertical: spacing.md,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.divider,
-  },
-  dividerText: {
-    ...typography.overline,
-    color: colors.textMuted,
-    fontSize: 10,
-  },
-  secondaryButton: {
-    height: 54,
-    borderRadius: spacing.buttonRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  secondaryButtonText: {
-    ...typography.headline,
+  switchLink: {
+    ...typography.callout,
+    fontFamily: fonts.semibold,
     color: colors.textPrimary,
-  },
-  footnote: {
-    ...typography.captionSmall,
-    color: colors.textMuted,
-    textAlign: 'center',
-    marginTop: spacing.xxl,
+    textDecorationLine: 'underline',
   },
 });

@@ -1,38 +1,18 @@
 import React, { useEffect, useRef } from 'react';
-import {
-  Animated,
-  Easing,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, { Circle, ClipPath, Defs, G, Rect } from 'react-native-svg';
 import { router } from 'expo-router';
-import { colors, spacing, typography } from '../../constants/theme';
+import { colors, fonts, spacing, typography } from '../../constants/theme';
 import { ONBOARDING_COPY } from '../../constants/onboarding';
+import { BrandMark, Button } from '../../components/ui';
 
 /**
- * Step 1 of the Eunoia onboarding flow — the redesigned Welcome screen.
+ * First screen of onboarding: an indigo hero carrying the BrandMark sun at
+ * full scale, one primary action, and a link for returning users.
  *
- * Visual contract (Requirements 1.1, 1.5, 2.1–2.7, 16.1–16.3):
- *   - `EUNOIA` overline brand mark, centered hero composition.
- *   - Primary headline rendered in `typography.largeTitle` and the
- *     supporting line in `typography.body`. Both use monochrome
- *     neutrals only; no accent or status colors are introduced
- *     (Requirement 2.6).
- *   - Exactly one primary CTA ("Begin") that advances to step 2 and
- *     one tertiary affordance for returning users ("I already have an
- *     account") that routes to login.
- *   - Entrance animation: 700 ms parallel opacity (0→1) and 8 px
- *     translateY (8→0) using `Animated` + `Easing.out(Easing.cubic)`,
- *     mirroring the splash pattern in `frontend/app/index.tsx`.
- *   - The animation is started inside a `useEffect` whose cleanup
- *     cancels the timing if the screen unmounts before the effect
- *     fires (Requirement 2.5).
- *
- * All values come from `frontend/constants/theme.ts` and
- * `frontend/constants/onboarding.ts`; no inline color or copy literals.
+ * The entrance animation starts in a microtask so an unmount before the
+ * effect body finishes cancels it entirely; cleanup stops it either way.
  */
 export default function Welcome() {
   const opacity = useRef(new Animated.Value(0)).current;
@@ -55,9 +35,6 @@ export default function Welcome() {
       }),
     ]);
 
-    // Defer .start() into a microtask so an unmount that happens before
-    // the effect's body finishes (i.e. before the React commit phase
-    // releases control) cancels the entrance entirely (Requirement 2.5).
     Promise.resolve().then(() => {
       if (cancelled) return;
       animation.start();
@@ -70,10 +47,6 @@ export default function Welcome() {
   }, [opacity, translateY]);
 
   const handleBegin = () => {
-    // The `/onboarding/basic` route is created by task 10.2; until that
-    // file exists, expo-router's typed-routes generator does not list
-    // it. Casting through `any` keeps the welcome screen self-contained
-    // without coupling its compilation to subsequent tasks.
     router.push('/onboarding/basic' as any);
   };
 
@@ -81,51 +54,57 @@ export default function Welcome() {
     router.push('/auth/login');
   };
 
+  const C = ONBOARDING_COPY.welcome;
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
-      <Animated.View
-        style={[
-          styles.hero,
-          { opacity, transform: [{ translateY }] },
-        ]}
-      >
-        <Text style={styles.brand} accessibilityRole="text">
-          {ONBOARDING_COPY.welcome.eyebrow}
-        </Text>
-        <Text style={styles.headline} accessibilityRole="header">
-          {ONBOARDING_COPY.welcome.headline}
-        </Text>
-        <Text style={styles.subtitle}>
-          {ONBOARDING_COPY.welcome.subtitle}
-        </Text>
-      </Animated.View>
+      <View style={styles.hero}>
+        <BrandMark size={28} inverse />
+
+        <Animated.View style={[styles.heroBody, { opacity, transform: [{ translateY }] }]}>
+          <View style={styles.sun} importantForAccessibility="no-hide-descendants">
+            <RisingSun />
+          </View>
+          <Text style={styles.headline} accessibilityRole="header">
+            {C.headline}
+          </Text>
+          <Text style={styles.subtitle}>{C.subtitle}</Text>
+        </Animated.View>
+      </View>
 
       <View style={styles.actions}>
-        <TouchableOpacity
-          style={styles.primaryCta}
-          onPress={handleBegin}
-          activeOpacity={0.9}
-          accessibilityRole="button"
-          accessibilityLabel={ONBOARDING_COPY.welcome.primaryCta}
-        >
-          <Text style={styles.primaryCtaText}>
-            {ONBOARDING_COPY.welcome.primaryCta}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.tertiaryCta}
+        <Button label={C.primaryCta} onPress={handleBegin} />
+        <Pressable
           onPress={handleSignIn}
-          activeOpacity={0.7}
+          hitSlop={12}
           accessibilityRole="link"
-          accessibilityLabel={ONBOARDING_COPY.welcome.secondaryCta}
+          style={({ pressed }) => [styles.link, pressed && styles.linkPressed]}
         >
-          <Text style={styles.tertiaryCtaText}>
-            {ONBOARDING_COPY.welcome.secondaryCta}
-          </Text>
-        </TouchableOpacity>
+          <Text style={styles.linkText}>{C.secondaryCta}</Text>
+        </Pressable>
       </View>
     </SafeAreaView>
+  );
+}
+
+// The BrandMark sun (marigold disc clipped at a white horizon) at hero
+// scale, with two faint halos. Scales down to fit shorter screens.
+function RisingSun() {
+  return (
+    <Svg width="100%" height="100%" viewBox="0 0 240 132" preserveAspectRatio="xMidYMax meet">
+      <Defs>
+        <ClipPath id="welcomeHorizon">
+          <Rect x="0" y="0" width="240" height="112" />
+        </ClipPath>
+      </Defs>
+      <G clipPath="url(#welcomeHorizon)">
+        {/* White rings, not tinted marigold: marigold over indigo turns muddy brown. */}
+        <Circle cx="120" cy="112" r="106" fill="none" stroke={colors.surface} strokeOpacity={0.08} strokeWidth={2} />
+        <Circle cx="120" cy="112" r="85" fill="none" stroke={colors.surface} strokeOpacity={0.14} strokeWidth={2} />
+        <Circle cx="120" cy="112" r="64" fill={colors.accent} />
+      </G>
+      <Rect x="36" y="120" width="168" height="6" rx="3" fill={colors.surface} opacity={0.9} />
+    </Svg>
   );
 }
 
@@ -134,52 +113,51 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
     paddingHorizontal: spacing.screenPadding,
+    paddingTop: spacing.sm,
   },
   hero: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: colors.inkSurface,
+    borderRadius: spacing.cardRadiusXl,
+    padding: spacing.xxl,
+    overflow: 'hidden',
   },
-  brand: {
-    ...typography.overline,
-    color: colors.textPrimary,
+  heroBody: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  sun: {
+    flex: 1,
+    minHeight: 96,
+    maxHeight: 220,
     marginBottom: spacing.xxl,
   },
   headline: {
-    ...typography.largeTitle,
-    color: colors.textPrimary,
-    textAlign: 'center',
-    marginBottom: spacing.lg,
+    ...typography.display,
+    color: colors.textInverse,
+    marginBottom: spacing.md,
   },
   subtitle: {
     ...typography.body,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    maxWidth: 320,
+    color: colors.textInverseMuted,
   },
   actions: {
-    paddingBottom: spacing.xxl,
-    alignItems: 'stretch',
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.md,
+    gap: spacing.sm,
   },
-  primaryCta: {
-    backgroundColor: colors.inkSurface,
-    borderRadius: spacing.buttonRadius,
-    paddingVertical: spacing.lg,
+  link: {
+    minHeight: 44,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.lg,
   },
-  primaryCtaText: {
-    ...typography.headline,
-    color: colors.textInverse,
+  linkPressed: {
+    opacity: 0.7,
   },
-  tertiaryCta: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: spacing.sm,
-  },
-  tertiaryCtaText: {
+  linkText: {
     ...typography.callout,
-    color: colors.textTertiary,
+    fontFamily: fonts.semibold,
+    color: colors.textPrimary,
+    textDecorationLine: 'underline',
   },
 });

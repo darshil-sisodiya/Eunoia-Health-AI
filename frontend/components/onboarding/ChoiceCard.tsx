@@ -1,7 +1,7 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, shadows, spacing, typography } from '../../constants/theme';
+import { colors, spacing, typography } from '../../constants/theme';
 
 export type ChoiceCardProps = {
   label: string;
@@ -13,18 +13,11 @@ export type ChoiceCardProps = {
 };
 
 /**
- * Single-select / multi-select option row used by the redesigned onboarding
- * screens (Lifestyle, Family History, Location).
+ * Full-width option row for single- or multi-select questions.
  *
- * Visual contract:
- *   - Left icon badge: `colors.backgroundSecondary`, becomes `colors.inkSurface`
- *     when `selected`.
- *   - Label: `typography.headline`, `colors.textSecondary` -> `colors.textPrimary`
- *     when selected.
- *   - Right check pip: hollow ring -> filled `colors.textPrimary` when selected.
- *
- * All values come from `frontend/constants/theme.ts`; no inline color, spacing,
- * or typography literals.
+ * Unselected: flat white row, hollow check ring. Selected: pale indigo tint,
+ * indigo border and a filled indigo check. `SegmentedRow` uses the same
+ * selected treatment so every choice in onboarding reads the same way.
  */
 export default function ChoiceCard({
   label,
@@ -35,40 +28,36 @@ export default function ChoiceCard({
   disabled = false,
 }: ChoiceCardProps) {
   return (
-    <TouchableOpacity
+    <Pressable
       testID={testID}
       onPress={onPress}
       disabled={disabled}
-      activeOpacity={0.85}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ selected, disabled }}
-      style={[
+      style={({ pressed }) => [
         styles.option,
         selected && styles.optionSelected,
         disabled && styles.optionDisabled,
+        pressed && styles.optionPressed,
       ]}
     >
-      <View style={[styles.iconBadge, selected && styles.iconBadgeSelected]}>
-        {iconName ? (
+      {iconName ? (
+        <View style={[styles.iconBadge, selected && styles.iconBadgeSelected]}>
           <Ionicons
             name={iconName}
             size={20}
-            color={selected ? colors.textInverse : colors.textTertiary}
+            color={selected ? colors.textInverse : colors.textSecondary}
           />
-        ) : null}
-      </View>
+        </View>
+      ) : null}
 
-      <Text style={[styles.optionText, selected && styles.optionTextSelected]}>
-        {label}
-      </Text>
+      <Text style={styles.optionText}>{label}</Text>
 
-      <View style={[styles.optionCheck, selected && styles.optionCheckSelected]}>
-        {selected ? (
-          <Ionicons name="checkmark" size={14} color={colors.textInverse} />
-        ) : null}
+      <View style={[styles.check, selected && styles.checkSelected]}>
+        {selected ? <Ionicons name="checkmark" size={16} color={colors.textInverse} /> : null}
       </View>
-    </TouchableOpacity>
+    </Pressable>
   );
 }
 
@@ -76,53 +65,53 @@ const styles = StyleSheet.create({
   option: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.lg,
+    gap: spacing.md,
+    minHeight: 60,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderRadius: spacing.cardRadius,
     backgroundColor: colors.surface,
-    borderRadius: spacing.cardRadiusLg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    // Transparent border on the resting state so selecting does not shift layout.
+    borderWidth: 1.5,
+    borderColor: 'transparent',
   },
   optionSelected: {
+    backgroundColor: colors.selected,
     borderColor: colors.textPrimary,
-    backgroundColor: colors.surface,
-    ...shadows.sm,
   },
   optionDisabled: {
     opacity: 0.4,
   },
+  optionPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
+  },
   iconBadge: {
-    width: 44,
-    height: 44,
-    borderRadius: spacing.cardRadius,
-    backgroundColor: colors.backgroundSecondary,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.background,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
   },
   iconBadgeSelected: {
     backgroundColor: colors.inkSurface,
-    borderColor: colors.inkSurface,
   },
   optionText: {
     flex: 1,
-    ...typography.headline,
-    color: colors.textSecondary,
-  },
-  optionTextSelected: {
+    ...typography.bodyMedium,
     color: colors.textPrimary,
   },
-  optionCheck: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+  check: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     borderWidth: 1.5,
     borderColor: colors.surfaceBorderStrong,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  optionCheckSelected: {
+  checkSelected: {
     backgroundColor: colors.textPrimary,
     borderColor: colors.textPrimary,
   },

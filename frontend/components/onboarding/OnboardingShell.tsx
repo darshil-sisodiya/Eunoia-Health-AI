@@ -1,15 +1,8 @@
 import React, { useEffect, useRef } from 'react';
-import {
-  Animated,
-  Easing,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { colors, shadows, spacing, typography } from '../../constants/theme';
+import { colors, spacing, typography } from '../../constants/theme';
+import { BrandMark, Button, IconButton } from '../ui';
 
 export type OnboardingShellProps = {
   /** 1-based current step index (1..totalSteps). */
@@ -22,7 +15,7 @@ export type OnboardingShellProps = {
    * anyone whose flow branches.
    */
   totalSteps: number;
-  /** Categorical label rendered above the body (typography.overline). */
+  /** Which part of the profile this step covers, shown above the body. */
   eyebrow: string;
   /** Disables the primary CTA when false. */
   canAdvance: boolean;
@@ -42,22 +35,9 @@ export type OnboardingShellProps = {
 };
 
 /**
- * Shell around each onboarding step. Provides the top-bar / progress-bar /
- * footer pattern shared by every step.
- *
- * Visual contract (Requirements 16.5, 17.1, 17.2):
- *   - Brand text `EUNOIA` in `typography.overline`, `colors.textPrimary`.
- *   - Step indicator `NN / NN` using `typography.overline`; the active part
- *     uses `colors.textPrimary` and the trailing ` / NN` uses
- *     `colors.textMuted`.
- *   - Progress bar is 2 px tall, track `colors.divider`, fill
- *     `colors.textPrimary`. Width animates via `Animated.timing` over
- *     200 ms whenever `step` changes.
- *   - Footer: optional back button on the left, primary CTA on the right
- *     (`colors.inkSurface` background, disabled state at 0.4 opacity).
- *
- * All values come from `frontend/constants/theme.ts`; no inline color,
- * spacing, or typography literals.
+ * Shell around each onboarding step: back + step count, a segmented
+ * progress track (one segment per step, since the flow really is a
+ * sequence), the body, and a full-width primary action.
  */
 export default function OnboardingShell({
   step,
@@ -70,113 +50,64 @@ export default function OnboardingShell({
   children,
   showBack = true,
 }: OnboardingShellProps) {
-  // Driven 0..1 progress value. The inner fill width interpolates to a
-  // percentage string so the bar sizes itself relative to its container
-  // (Requirement 17.2: "(step / totalSteps) * containerWidth").
-  const initialProgress = clampProgress(step, totalSteps);
-  const progress = useRef(new Animated.Value(initialProgress)).current;
+  // Only the current segment animates; completed ones are solid.
+  const fill = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.timing(progress, {
-      toValue: clampProgress(step, totalSteps),
-      duration: 200,
+    fill.setValue(0);
+    Animated.timing(fill, {
+      toValue: 1,
+      duration: 320,
       easing: Easing.out(Easing.cubic),
-      // Width is not animatable on the native driver, so we run on JS.
       useNativeDriver: false,
     }).start();
-  }, [step, totalSteps, progress]);
+  }, [step, fill]);
 
-  const fillWidth = progress.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0%', '100%'],
-  });
-
-  const stepLabel = pad2(step);
-  const totalLabel = pad2(totalSteps);
-  const accessibilityStepLabel = `Step ${step} of ${totalSteps}`;
-  const showBackButton = showBack && step > 1 && typeof onBack === 'function';
-  const advanceDisabled = !canAdvance;
+  const total = Math.max(1, Math.trunc(Number.isFinite(totalSteps) ? totalSteps : 1));
+  const current = Math.min(Math.max(1, Math.trunc(Number.isFinite(step) ? step : 1)), total);
+  const showBackButton = showBack && current > 1 && typeof onBack === 'function';
+  const fillWidth = fill.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
-      {/* ── Top bar ─────────────────────────────────────── */}
       <View style={styles.topBar}>
-        <Text style={styles.brandText}>EUNOIA</Text>
-        <Text style={styles.stepIndicator}>
-          <Text style={styles.stepIndicatorActive}>{stepLabel}</Text>
-          <Text style={styles.stepIndicatorMuted}>{` / ${totalLabel}`}</Text>
+        {showBackButton ? (
+          <IconButton icon="chevron-back" label="Go back" onPress={onBack!} />
+        ) : (
+          <BrandMark size={26} />
+        )}
+        <Text style={styles.stepText}>
+          Step {current} of {total}
         </Text>
       </View>
 
-      {/* ── Progress ─────────────────────────────────────── */}
-      <View style={styles.progressContainer}>
-        <View
-          style={styles.progressBar}
-          accessible
-          accessibilityRole="progressbar"
-          accessibilityLabel={accessibilityStepLabel}
-          accessibilityLiveRegion="polite"
-          accessibilityValue={{ min: 0, max: totalSteps, now: step }}
-        >
-          <Animated.View
-            style={[styles.progressFill, { width: fillWidth }]}
-          />
-        </View>
+      <View
+        style={styles.progress}
+        accessible
+        accessibilityRole="progressbar"
+        accessibilityLabel={`Step ${current} of ${total}`}
+        accessibilityValue={{ min: 0, max: total, now: current }}
+      >
+        {Array.from({ length: total }, (_, i) => (
+          <View key={i} style={styles.segment}>
+            {i + 1 < current ? <View style={styles.segmentDone} /> : null}
+            {i + 1 === current ? (
+              <Animated.View style={[styles.segmentDone, { width: fillWidth }]} />
+            ) : null}
+          </View>
+        ))}
       </View>
 
-      {/* ── Body ─────────────────────────────────────────── */}
       <View style={styles.body}>
         {eyebrow ? <Text style={styles.eyebrow}>{eyebrow}</Text> : null}
         <View style={styles.bodyContent}>{children}</View>
       </View>
 
-      {/* ── Footer actions ──────────────────────────────── */}
       <View style={styles.footer}>
-        {showBackButton ? (
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={onBack}
-            activeOpacity={0.7}
-            accessibilityRole="button"
-            accessibilityLabel="Go back"
-          >
-            <Ionicons name="arrow-back" size={18} color={colors.textPrimary} />
-            <Text style={styles.backButtonText}>Back</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.backSpacer} />
-        )}
-
-        <TouchableOpacity
-          style={[styles.nextButton, advanceDisabled && styles.buttonDisabled]}
-          onPress={onAdvance}
-          disabled={advanceDisabled}
-          activeOpacity={0.9}
-          accessibilityRole="button"
-          accessibilityLabel={advanceLabel}
-          accessibilityState={{ disabled: advanceDisabled }}
-        >
-          <Text style={styles.nextButtonText}>{advanceLabel}</Text>
-          <Ionicons name="arrow-forward" size={18} color={colors.textInverse} />
-        </TouchableOpacity>
+        <Button label={advanceLabel} onPress={onAdvance} disabled={!canAdvance} />
       </View>
     </SafeAreaView>
   );
-}
-
-function pad2(n: number): string {
-  const safe = Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
-  return String(safe).padStart(2, '0');
-}
-
-function clampProgress(step: number, totalSteps: number): number {
-  if (!Number.isFinite(step) || !Number.isFinite(totalSteps) || totalSteps <= 0) {
-    return 0;
-  }
-  const ratio = step / totalSteps;
-  if (ratio <= 0) return 0;
-  if (ratio >= 1) return 1;
-  return ratio;
 }
 
 const styles = StyleSheet.create({
@@ -188,92 +119,50 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    minHeight: 44,
     paddingHorizontal: spacing.screenPadding,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.md,
+    paddingTop: spacing.sm,
+    marginBottom: spacing.lg,
   },
-  brandText: {
-    ...typography.overline,
-    color: colors.textPrimary,
+  stepText: {
+    ...typography.callout,
+    color: colors.textSecondary,
   },
-  stepIndicator: {
-    ...typography.overline,
-  },
-  stepIndicatorActive: {
-    color: colors.textPrimary,
-  },
-  stepIndicatorMuted: {
-    color: colors.textMuted,
-  },
-  progressContainer: {
+  progress: {
+    flexDirection: 'row',
+    gap: 4,
     paddingHorizontal: spacing.screenPadding,
-    marginBottom: spacing.xxxl,
+    marginBottom: spacing.xxl,
   },
-  progressBar: {
-    height: 2,
-    backgroundColor: colors.divider,
-    borderRadius: 1,
+  segment: {
+    flex: 1,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.surfaceBorder,
     overflow: 'hidden',
   },
-  progressFill: {
+  segmentDone: {
     height: '100%',
-    backgroundColor: colors.textPrimary,
+    width: '100%',
+    borderRadius: 2,
+    backgroundColor: colors.accent,
   },
   body: {
     flex: 1,
     paddingHorizontal: spacing.screenPadding,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.xxxl,
   },
   eyebrow: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: spacing.md,
+    ...typography.callout,
+    color: colors.accentText,
+    marginBottom: spacing.sm,
   },
   bodyContent: {
     flex: 1,
   },
   footer: {
-    flexDirection: 'row',
     paddingHorizontal: spacing.screenPadding,
-    paddingVertical: spacing.lg,
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderTopWidth: 1,
-    borderTopColor: colors.divider,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
     backgroundColor: colors.background,
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs + 2,
-    paddingHorizontal: spacing.md,
-    height: 48,
-  },
-  backSpacer: {
-    width: 80,
-    height: 48,
-  },
-  backButtonText: {
-    ...typography.callout,
-    color: colors.textPrimary,
-    fontWeight: '600',
-  },
-  nextButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.inkSurface,
-    borderRadius: spacing.buttonRadius,
-    paddingVertical: 14,
-    paddingHorizontal: spacing.xxl,
-    ...shadows.md,
-  },
-  nextButtonText: {
-    ...typography.headline,
-    color: colors.textInverse,
-  },
-  buttonDisabled: {
-    opacity: 0.4,
   },
 });

@@ -3,12 +3,11 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
+  Pressable,
   ScrollView,
   Alert,
   ActivityIndicator,
   RefreshControl,
-  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,8 +15,120 @@ import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '@/contexts/AuthContext';
 import { uploadPrescription, getPrescriptionHistory, PrescriptionAnalysis } from '@/utils/api';
 import { MarkdownText } from '@/components/MarkdownText';
-import { colors, spacing, shadows, typography } from '@/constants/theme';
+import { colors, fonts, spacing, typography } from '@/constants/theme';
 import { useHealthProfile } from '@/contexts/HealthProfileContext';
+import { Notice, ScreenHeader, tap } from '@/components/ui';
+
+type IconName = keyof typeof Ionicons.glyphMap;
+
+// Shown one after another while the upload runs, so the wait reads as work
+// in progress rather than a frozen screen.
+const ANALYSIS_STEPS = [
+  'Reading the text on your prescription',
+  'Identifying the medicine and dose',
+  'Checking it against your health profile',
+];
+
+function formatDate(iso: string, month: 'short' | 'long') {
+  return new Date(iso).toLocaleDateString('en-US', { month, day: 'numeric', year: 'numeric' });
+}
+
+function AnalyzingView() {
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setStep((s) => Math.min(s + 1, ANALYSIS_STEPS.length - 1)), 2500);
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <View style={styles.analyzing} accessibilityLiveRegion="polite">
+      <Text style={styles.analyzingTitle} accessibilityRole="header">
+        Reading your prescription
+      </Text>
+      <Text style={styles.analyzingSub}>Keep the app open. This can take up to half a minute.</Text>
+      <View style={styles.stepsCard}>
+        {ANALYSIS_STEPS.map((label, i) => {
+          const done = i < step;
+          const current = i === step;
+          return (
+            <View key={label} style={styles.stepRow}>
+              <View style={styles.stepIcon}>
+                {done ? (
+                  <Ionicons name="checkmark-circle" size={22} color={colors.success} />
+                ) : current ? (
+                  <ActivityIndicator size="small" color={colors.textTertiary} />
+                ) : (
+                  <View style={styles.stepPending} />
+                )}
+              </View>
+              <Text style={[styles.stepText, !done && !current && styles.stepTextPending]}>{label}</Text>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function HeroButton({
+  icon,
+  label,
+  onPress,
+  light,
+}: {
+  icon: IconName;
+  label: string;
+  onPress: () => void;
+  light?: boolean;
+}) {
+  return (
+    <Pressable
+      onPress={() => {
+        tap();
+        onPress();
+      }}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={({ pressed }) => [
+        styles.heroButton,
+        { backgroundColor: light ? colors.surface : colors.inkSurfaceElevated },
+        pressed && styles.pressed,
+      ]}
+    >
+      <Ionicons name={icon} size={18} color={light ? colors.textPrimary : colors.textInverse} />
+      <Text style={[styles.heroButtonText, { color: light ? colors.textPrimary : colors.textInverse }]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function DetailSection({
+  icon,
+  label,
+  content,
+  tone,
+}: {
+  icon: IconName;
+  label: string;
+  content?: string | null;
+  tone?: 'warning' | 'error';
+}) {
+  if (!content) return null;
+  const fg = tone === 'warning' ? colors.warning : tone === 'error' ? colors.error : colors.textPrimary;
+  const bg = tone === 'warning' ? colors.warningSoft : tone === 'error' ? colors.errorSoft : colors.selected;
+  return (
+    <View style={styles.detailSection}>
+      <View style={styles.detailSectionHeader}>
+        <View style={[styles.sectionIcon, { backgroundColor: bg }]}>
+          <Ionicons name={icon} size={16} color={fg} />
+        </View>
+        <Text style={styles.detailSectionTitle}>{label}</Text>
+      </View>
+      <Text style={styles.detailText}>{content}</Text>
+    </View>
+  );
+}
 
 export default function PrescriptionsScreen() {
   const { token } = useAuth();
@@ -29,10 +140,13 @@ export default function PrescriptionsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [selectedPrescription, setSelectedPrescription] = useState<PrescriptionAnalysis | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
+  // Re-run once the stored token has loaded; on a cold start it is null at mount.
   useEffect(() => {
     loadPrescriptions();
-  }, []);
+  }, [token]);
 
   const loadPrescriptions = async () => {
     if (!token) return;
@@ -40,8 +154,9 @@ export default function PrescriptionsScreen() {
       setLoading(true);
       const data = await getPrescriptionHistory(token);
       setPrescriptions(data);
+      setLoadError(false);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load prescriptions');
+      setLoadError(true);
       console.error(error);
     } finally {
       setLoading(false);
@@ -55,12 +170,13 @@ export default function PrescriptionsScreen() {
   };
 
   const pickImage = async (source: 'camera' | 'library') => {
+    setUploadError(null);
     try {
       let result;
       if (source === 'camera') {
         const permission = await ImagePicker.requestCameraPermissionsAsync();
         if (!permission.granted) {
-          Alert.alert('Permission Required', 'Camera permission is needed to take photos');
+          Alert.alert('Camera access needed', 'Allow camera access in your device settings to scan a prescription.');
           return;
         }
         result = await ImagePicker.launchCameraAsync({
@@ -71,7 +187,7 @@ export default function PrescriptionsScreen() {
       } else {
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (!permission.granted) {
-          Alert.alert('Permission Required', 'Photo library permission is needed');
+          Alert.alert('Photo access needed', 'Allow photo library access in your device settings to choose a prescription.');
           return;
         }
         result = await ImagePicker.launchImageLibraryAsync({
@@ -85,7 +201,7 @@ export default function PrescriptionsScreen() {
       }
     } catch (error) {
       console.error('Error picking image:', error);
-      Alert.alert('Error', 'Failed to pick image');
+      setUploadError('Could not open the photo. Try again, or choose a different one.');
     }
   };
 
@@ -100,7 +216,9 @@ export default function PrescriptionsScreen() {
       offerToSaveMedication(analysis);
     } catch (error: any) {
       setUploading(false);
-      Alert.alert('Error', error.message || 'Failed to upload prescription');
+      setUploadError(
+        error.message || 'Could not read that prescription. Check your connection and try a clearer photo.',
+      );
       console.error(error);
     }
   };
@@ -114,7 +232,8 @@ export default function PrescriptionsScreen() {
    * against for interactions.
    */
   const offerToSaveMedication = (analysis: PrescriptionAnalysis) => {
-    const name = (analysis.medication_name || '').trim();
+    // Backend caps name at 80 and dose at 60 chars; OCR output can run longer.
+    const name = (analysis.medication_name || '').trim().slice(0, 80);
     if (!name) return;
 
     const known = (profile?.medications ?? []).some(
@@ -143,14 +262,14 @@ export default function PrescriptionsScreen() {
                   })),
                   {
                     name,
-                    dose: analysis.dosage ?? null,
+                    dose: analysis.dosage?.trim().slice(0, 60) || null,
                     started_bucket: 'lt_1m' as const,
                     adherence: 'unknown' as const,
                   },
                 ],
               });
             } catch {
-              Alert.alert('Could not save', 'Your medication list was not updated.');
+              Alert.alert('Could not save', 'Your medication list was not updated. Try again from your profile.');
             }
           },
         },
@@ -158,233 +277,146 @@ export default function PrescriptionsScreen() {
     );
   };
 
-  const showUploadOptions = () => {
-    Alert.alert(
-      'Upload Prescription',
-      'Choose a source',
-      [
-        { text: 'Take Photo', onPress: () => pickImage('camera') },
-        { text: 'Choose from Library', onPress: () => pickImage('library') },
-        { text: 'Cancel', style: 'cancel' },
-      ],
-      { cancelable: true },
-    );
-  };
-
-  const renderPrescriptionCard = (prescription: PrescriptionAnalysis, index: number) => (
-    <TouchableOpacity
-      key={prescription.id}
-      onPress={() => setSelectedPrescription(prescription)}
-      activeOpacity={0.85}
-      style={styles.prescriptionCard}
-    >
-      <View style={styles.cardLeft}>
-        <Text style={styles.cardIndex}>{String(index + 1).padStart(2, '0')}</Text>
-      </View>
-      <View style={styles.cardBody}>
-        <View style={styles.cardHeaderRow}>
-          <Text style={styles.medicationName} numberOfLines={1}>{prescription.medication_name}</Text>
-          <Ionicons name="arrow-forward" size={16} color={colors.textTertiary} />
-        </View>
-        <Text style={styles.date}>
-          {new Date(prescription.created_at).toLocaleDateString('en-US', {
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric',
-          })}
-        </Text>
-        {(prescription.frequency || prescription.timing) && (
-          <View style={styles.cardDetails}>
-            {prescription.frequency && (
-              <View style={styles.detailChip}>
-                <Ionicons name="time-outline" size={12} color={colors.textTertiary} />
-                <Text style={styles.detailChipText}>{prescription.frequency}</Text>
-              </View>
-            )}
-            {prescription.timing && (
-              <View style={styles.detailChip}>
-                <Ionicons name="sunny-outline" size={12} color={colors.textTertiary} />
-                <Text style={styles.detailChipText}>{prescription.timing}</Text>
-              </View>
-            )}
-          </View>
-        )}
-      </View>
-    </TouchableOpacity>
-  );
-
-  const renderDetailSection = (
-    icon: keyof typeof Ionicons.glyphMap,
-    label: string,
-    content: string | null | undefined,
-    accent?: 'warning' | 'error' | 'accent',
-  ) => {
-    if (!content) return null;
-    const accentColor =
-      accent === 'warning' ? colors.warning : accent === 'error' ? colors.error : colors.textPrimary;
-    return (
-      <View style={styles.detailSection}>
-        <View style={styles.detailSectionHeader}>
-          <View style={styles.sectionIconBg}>
-            <Ionicons name={icon} size={14} color={accentColor} />
-          </View>
-          <Text style={styles.detailSectionTitle}>{label}</Text>
-        </View>
-        <Text style={styles.detailText}>{content}</Text>
-      </View>
-    );
-  };
-
-  const renderPrescriptionDetail = () => {
-    if (!selectedPrescription) return null;
-
-    return (
-      <ScrollView style={styles.detailContainer} contentContainerStyle={styles.detailContent} showsVerticalScrollIndicator={false}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => setSelectedPrescription(null)}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="arrow-back" size={18} color={colors.textPrimary} />
-          <Text style={styles.backButtonText}>All prescriptions</Text>
-        </TouchableOpacity>
-
-        <View style={styles.detailHeader}>
-          <Text style={styles.detailEyebrow}>PRESCRIPTION</Text>
-          <Text style={styles.detailTitle}>{selectedPrescription.medication_name}</Text>
-          <Text style={styles.detailDate}>
-            Added {new Date(selectedPrescription.created_at).toLocaleDateString('en-US', {
-              month: 'long',
-              day: 'numeric',
-              year: 'numeric',
-            })}
-          </Text>
-        </View>
-
-        <View style={styles.detailCard}>
-          {renderDetailSection('fitness-outline', 'Dosage', selectedPrescription.dosage)}
-          {renderDetailSection('time-outline', 'Frequency', selectedPrescription.frequency)}
-          {renderDetailSection('sunny-outline', 'Best time to take', selectedPrescription.timing)}
-          {renderDetailSection('information-circle-outline', 'Purpose', selectedPrescription.purpose)}
-          {renderDetailSection('warning-outline', 'Possible side effects', selectedPrescription.side_effects, 'warning')}
-          {renderDetailSection('alert-circle-outline', 'Interactions & warnings', selectedPrescription.interactions, 'error')}
-
-          {selectedPrescription.personalized_advice && (
-            <View style={styles.detailSection}>
-              <View style={styles.detailSectionHeader}>
-                <View style={[styles.sectionIconBg, { backgroundColor: colors.accentMuted, borderColor: colors.accentSoftBorder }]}>
-                  <Ionicons name="sparkles" size={14} color={colors.accent} />
-                </View>
-                <Text style={styles.detailSectionTitle}>Personalized advice</Text>
-              </View>
-              <View style={styles.markdownWrap}>
-                <MarkdownText content={selectedPrescription.personalized_advice} />
-              </View>
-            </View>
-          )}
-        </View>
-
-        <View style={styles.extractedSection}>
-          <Text style={styles.extractedLabel}>EXTRACTED TEXT</Text>
-          <Text style={styles.extractedText}>{selectedPrescription.extracted_text}</Text>
-        </View>
-      </ScrollView>
-    );
-  };
-
   if (uploading) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="small" color={colors.textTertiary} />
-          <Text style={styles.loadingEyebrow}>ANALYZING</Text>
-          <Text style={styles.loadingText}>Reading prescription</Text>
-          <Text style={styles.loadingSubtext}>Extracting medication details and personalizing guidance.</Text>
-        </View>
+        <AnalyzingView />
       </SafeAreaView>
     );
   }
 
   if (selectedPrescription) {
+    const p = selectedPrescription;
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
-        {renderPrescriptionDetail()}
+        <ScrollView contentContainerStyle={styles.detailContent} showsVerticalScrollIndicator={false}>
+          <ScreenHeader
+            title={p.medication_name}
+            subtitle={`Added ${formatDate(p.created_at, 'long')}`}
+            onBack={() => setSelectedPrescription(null)}
+          />
+
+          <View style={styles.body}>
+            <View style={styles.card}>
+              <DetailSection icon="fitness-outline" label="Dosage" content={p.dosage} />
+              <DetailSection icon="time-outline" label="How often" content={p.frequency} />
+              <DetailSection icon="sunny-outline" label="Best time to take" content={p.timing} />
+              <DetailSection icon="information-circle-outline" label="What it's for" content={p.purpose} />
+              <DetailSection icon="warning-outline" label="Possible side effects" content={p.side_effects} tone="warning" />
+              <DetailSection icon="alert-circle-outline" label="Interactions and warnings" content={p.interactions} tone="error" />
+            </View>
+
+            {p.personalized_advice ? (
+              <View style={styles.card}>
+                <View style={styles.detailSectionHeader}>
+                  <View style={[styles.sectionIcon, { backgroundColor: colors.accentSoft }]}>
+                    <Ionicons name="sparkles-outline" size={16} color={colors.textPrimary} />
+                  </View>
+                  <Text style={styles.cardTitle}>Guidance for you</Text>
+                </View>
+                <MarkdownText content={p.personalized_advice} />
+              </View>
+            ) : null}
+
+            {p.extracted_text ? (
+              <View style={styles.extracted}>
+                <Text style={styles.extractedLabel}>Extracted text</Text>
+                <Text style={styles.extractedText} selectable>
+                  {p.extracted_text}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* ── Editorial header ─────────────────────────────── */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <Text style={styles.headerEyebrow}>EUNOIA · ANALYZER</Text>
-          <Text style={styles.title}>Prescriptions</Text>
-          <Text style={styles.subtitle}>
-            {prescriptions.length} {prescriptions.length !== 1 ? 'medications' : 'medication'} on file
-          </Text>
-        </View>
-        <TouchableOpacity style={styles.uploadButtonHeader} onPress={showUploadOptions} activeOpacity={0.9}>
-          <Ionicons name="add" size={20} color={colors.textInverse} />
-        </TouchableOpacity>
-      </View>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.textTertiary} />
+        }
+      >
+        <Text style={styles.title} accessibilityRole="header">
+          Prescriptions
+        </Text>
 
-      <View style={styles.headerRule} />
-
-      {loading && !refreshing ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="small" color={colors.textTertiary} />
-        </View>
-      ) : prescriptions.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <View style={styles.emptyIconWrap}>
-            <Ionicons name="document-text-outline" size={32} color={colors.textPrimary} />
+        {/* ── Primary action ─────────────────────────────── */}
+        <View style={styles.hero}>
+          <View style={styles.heroIcon}>
+            <Ionicons name="scan-outline" size={22} color={colors.textPrimary} />
           </View>
-          <Text style={styles.emptyEyebrow}>NO PRESCRIPTIONS</Text>
-          <Text style={styles.emptyTitle}>Start your library.</Text>
-          <Text style={styles.emptyText}>
-            Upload a photo to receive AI-powered analysis and personalized guidance.
+          <Text style={styles.heroTitle}>Scan a prescription</Text>
+          <Text style={styles.heroBody}>
+            Get the dose, timing and side effects for each medicine, checked against your health profile.
           </Text>
-          <TouchableOpacity onPress={showUploadOptions} activeOpacity={0.9} style={styles.uploadButtonLarge}>
-            <Ionicons name="camera-outline" size={18} color={colors.textInverse} />
-            <Text style={styles.uploadButtonText}>Upload prescription</Text>
-          </TouchableOpacity>
+          <View style={styles.heroActions}>
+            <HeroButton icon="camera-outline" label="Scan prescription" onPress={() => pickImage('camera')} light />
+            <HeroButton icon="images-outline" label="Choose from photos" onPress={() => pickImage('library')} />
+          </View>
         </View>
-      ) : (
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={colors.textTertiary}
-            />
-          }
-        >
-          {/* Info Card */}
-          <View style={styles.infoCard}>
-            <View style={styles.infoIconBg}>
-              <Ionicons name="shield-checkmark-outline" size={16} color={colors.textPrimary} />
+
+        {uploadError ? (
+          <View style={styles.gap}>
+            <Notice>{uploadError}</Notice>
+          </View>
+        ) : null}
+
+        {/* ── History ────────────────────────────────────── */}
+        <Text style={styles.sectionTitle}>Past prescriptions</Text>
+
+        {loading && !refreshing && prescriptions.length === 0 ? (
+          <View style={styles.listLoading}>
+            <ActivityIndicator size="small" color={colors.textTertiary} />
+          </View>
+        ) : loadError && prescriptions.length === 0 ? (
+          <Notice>Could not load your prescriptions. Pull down to try again.</Notice>
+        ) : prescriptions.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <View style={styles.rowIcon}>
+              <Ionicons name="document-text-outline" size={20} color={colors.textPrimary} />
             </View>
-            <Text style={styles.infoText}>
-              Personalized medication guidance, contextualized to your health profile.
-            </Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>No prescriptions yet</Text>
+              <Text style={styles.rowMeta}>
+                Scan your first one above. It will be saved here so you can check it any time.
+              </Text>
+            </View>
           </View>
-
-          {/* List */}
-          <View style={styles.prescriptionsList}>
-            {prescriptions.map((p, i) => renderPrescriptionCard(p, i))}
-          </View>
-
-          {/* Add more */}
-          <TouchableOpacity style={styles.addMoreButton} onPress={showUploadOptions} activeOpacity={0.85}>
-            <Ionicons name="add" size={18} color={colors.textPrimary} />
-            <Text style={styles.addMoreText}>Add another prescription</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      )}
+        ) : (
+          prescriptions.map((p) => (
+            <Pressable
+              key={p.id}
+              onPress={() => setSelectedPrescription(p)}
+              style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+              accessibilityRole="button"
+              accessibilityLabel={`${p.medication_name}, added ${formatDate(p.created_at, 'long')}. Open details.`}
+            >
+              <View style={styles.rowIcon}>
+                <Ionicons name="document-text-outline" size={20} color={colors.textPrimary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowTitle} numberOfLines={1}>
+                  {p.medication_name}
+                </Text>
+                <Text style={styles.rowMeta} numberOfLines={1}>
+                  {formatDate(p.created_at, 'short')}
+                </Text>
+                {p.frequency ? (
+                  <Text style={styles.rowMeta} numberOfLines={1}>
+                    {p.frequency}
+                  </Text>
+                ) : null}
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+            </Pressable>
+          ))
+        )}
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -394,338 +426,221 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
-
-  // ─── Header ──────────────────────────────────────────────
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
+  scrollContent: {
     paddingHorizontal: spacing.screenPadding,
     paddingTop: spacing.lg,
-    paddingBottom: spacing.lg,
+    paddingBottom: spacing.xxxl,
   },
-  headerLeft: {
-    flex: 1,
+  pressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
   },
-  headerEyebrow: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: 4,
+  gap: {
+    marginBottom: spacing.md,
   },
   title: {
     ...typography.largeTitle,
     color: colors.textPrimary,
-  },
-  subtitle: {
-    ...typography.callout,
-    color: colors.textTertiary,
-    marginTop: 4,
-  },
-  uploadButtonHeader: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: colors.inkSurface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadows.sm,
-  },
-  headerRule: {
-    height: 1,
-    backgroundColor: colors.divider,
-    marginHorizontal: spacing.screenPadding,
-  },
-
-  // ─── List ────────────────────────────────────────────────
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: spacing.screenPadding,
-    paddingTop: spacing.lg,
-    paddingBottom: 140,
-  },
-
-  // ─── States ──────────────────────────────────────────────
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: spacing.xxl,
-    gap: spacing.md,
-  },
-  loadingEyebrow: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginTop: spacing.lg,
-  },
-  loadingText: {
-    ...typography.title,
-    color: colors.textPrimary,
-  },
-  loadingSubtext: {
-    ...typography.callout,
-    color: colors.textTertiary,
-    textAlign: 'center',
-    maxWidth: 280,
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 40,
-  },
-  emptyIconWrap: {
-    width: 64,
-    height: 64,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
     marginBottom: spacing.xl,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    ...shadows.sm,
   },
-  emptyEyebrow: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: 10,
-  },
-  emptyTitle: {
-    ...typography.title,
-    color: colors.textPrimary,
-    textAlign: 'center',
-  },
-  emptyText: {
-    ...typography.body,
-    color: colors.textTertiary,
-    textAlign: 'center',
-    marginTop: spacing.sm,
-    maxWidth: 280,
-  },
-  uploadButtonLarge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderRadius: spacing.buttonRadius,
-    marginTop: spacing.xxl,
-    gap: spacing.sm,
+
+  // Hero
+  hero: {
     backgroundColor: colors.inkSurface,
-    ...shadows.md,
-  },
-  uploadButtonText: {
-    ...typography.headline,
-    color: colors.textInverse,
-  },
-
-  // ─── Info card ──────────────────────────────────────────
-  infoCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: spacing.cardRadiusLg,
-    padding: spacing.lg,
-    gap: spacing.md,
-    marginBottom: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  infoIconBg: {
-    width: 32,
-    height: 32,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.backgroundTertiary,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  infoText: {
-    flex: 1,
-    ...typography.callout,
-    color: colors.textSecondary,
-  },
-
-  // ─── Prescription card ──────────────────────────────────
-  prescriptionsList: {
-    gap: spacing.sm,
-  },
-  prescriptionCard: {
-    flexDirection: 'row',
-    backgroundColor: colors.surface,
-    borderRadius: spacing.cardRadiusLg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    overflow: 'hidden',
-  },
-  cardLeft: {
-    width: 56,
-    paddingTop: spacing.lg,
-    paddingLeft: spacing.lg,
-  },
-  cardIndex: {
-    ...typography.overline,
-    fontSize: 10,
-    color: colors.textMuted,
-    fontVariant: ['tabular-nums'],
-  },
-  cardBody: {
-    flex: 1,
-    padding: spacing.lg,
-    paddingLeft: 0,
-  },
-  cardHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.md,
-  },
-  medicationName: {
-    ...typography.subtitle,
-    color: colors.textPrimary,
-    flex: 1,
-  },
-  date: {
-    ...typography.caption,
-    color: colors.textTertiary,
-    marginTop: 4,
-  },
-  cardDetails: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginTop: spacing.md,
-  },
-  detailChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: colors.backgroundSecondary,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: spacing.chipRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  detailChipText: {
-    ...typography.captionSmall,
-    color: colors.textSecondary,
-  },
-  addMoreButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.lg,
-    marginTop: spacing.lg,
-    borderTopWidth: 1,
-    borderTopColor: colors.divider,
-  },
-  addMoreText: {
-    ...typography.bodyMedium,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-
-  // ─── Detail view ────────────────────────────────────────
-  detailContainer: {
-    flex: 1,
-  },
-  detailContent: {
-    paddingBottom: 140,
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: spacing.screenPadding,
-    paddingVertical: spacing.md,
-  },
-  backButtonText: {
-    ...typography.callout,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  detailHeader: {
-    paddingHorizontal: spacing.screenPadding,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.xxl,
-  },
-  detailEyebrow: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: 8,
-  },
-  detailTitle: {
-    ...typography.display,
-    fontSize: 36,
-    color: colors.textPrimary,
-  },
-  detailDate: {
-    ...typography.callout,
-    color: colors.textTertiary,
-    marginTop: 8,
-  },
-  detailCard: {
-    backgroundColor: colors.surface,
-    marginHorizontal: spacing.screenPadding,
     borderRadius: spacing.cardRadiusXl,
     padding: spacing.xl,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    ...shadows.sm,
+    marginBottom: spacing.md,
+  },
+  heroIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.lg,
+  },
+  heroTitle: {
+    ...typography.title,
+    color: colors.textInverse,
+  },
+  heroBody: {
+    ...typography.callout,
+    fontFamily: fonts.regular,
+    lineHeight: 21,
+    color: colors.textInverseMuted,
+    marginTop: spacing.xs,
+  },
+  heroActions: {
+    gap: spacing.sm,
+    marginTop: spacing.xl,
+  },
+  heroButton: {
+    minHeight: 50,
+    borderRadius: spacing.buttonRadius,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+  },
+  heroButtonText: {
+    ...typography.headline,
+  },
+
+  // History
+  sectionTitle: {
+    ...typography.subtitle,
+    color: colors.textPrimary,
+    marginTop: spacing.xl,
+    marginBottom: spacing.md,
+  },
+  listLoading: {
+    paddingVertical: spacing.xxxl,
+    alignItems: 'center',
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.lg,
+    backgroundColor: colors.surface,
+    borderRadius: spacing.cardRadiusLg,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.xl,
+    marginBottom: spacing.md,
+  },
+  emptyCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.lg,
+    backgroundColor: colors.surface,
+    borderRadius: spacing.cardRadiusLg,
+    padding: spacing.xl,
+  },
+  rowIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.selected,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowTitle: {
+    ...typography.headline,
+    color: colors.textPrimary,
+  },
+  rowMeta: {
+    ...typography.caption,
+    fontFamily: fonts.regular,
+    color: colors.textTertiary,
+    marginTop: 2,
+  },
+
+  // Analyzing
+  analyzing: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.screenPadding,
+  },
+  analyzingTitle: {
+    ...typography.largeTitle,
+    color: colors.textPrimary,
+  },
+  analyzingSub: {
+    ...typography.body,
+    color: colors.textSecondary,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xxl,
+  },
+  stepsCard: {
+    backgroundColor: colors.surface,
+    borderRadius: spacing.cardRadiusLg,
+    padding: spacing.xl,
+    gap: spacing.lg,
+  },
+  stepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  stepIcon: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepPending: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1.5,
+    borderColor: colors.surfaceBorderStrong,
+  },
+  stepText: {
+    ...typography.callout,
+    color: colors.textPrimary,
+    flex: 1,
+  },
+  stepTextPending: {
+    color: colors.textTertiary,
+  },
+
+  // Detail
+  detailContent: {
+    paddingBottom: spacing.xxxl,
+  },
+  body: {
+    paddingHorizontal: spacing.screenPadding,
+    gap: spacing.md,
+  },
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: spacing.cardRadiusLg,
+    padding: spacing.xl,
+    gap: spacing.xl,
+  },
+  cardTitle: {
+    ...typography.title,
+    color: colors.textPrimary,
+    flex: 1,
   },
   detailSection: {
-    paddingVertical: spacing.lg,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
+    gap: spacing.sm,
   },
   detailSectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    marginBottom: 10,
+    gap: spacing.md,
   },
-  sectionIconBg: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
+  sectionIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.backgroundSecondary,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
   },
   detailSectionTitle: {
-    ...typography.overline,
+    ...typography.headline,
     color: colors.textPrimary,
   },
   detailText: {
     ...typography.body,
     color: colors.textSecondary,
   },
-  markdownWrap: {
-    marginTop: -4,
-  },
-  extractedSection: {
-    marginHorizontal: spacing.screenPadding,
-    marginTop: spacing.lg,
-    backgroundColor: colors.backgroundSecondary,
+  extracted: {
+    backgroundColor: colors.backgroundTertiary,
     borderRadius: spacing.cardRadiusLg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    padding: spacing.xl,
   },
   extractedLabel: {
     ...typography.overline,
-    color: colors.textTertiary,
+    color: colors.textSecondary,
     marginBottom: spacing.sm,
   },
   extractedText: {
-    ...typography.mono,
-    color: colors.textTertiary,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    ...typography.callout,
+    fontFamily: fonts.regular,
+    lineHeight: 21,
+    color: colors.textSecondary,
   },
 });

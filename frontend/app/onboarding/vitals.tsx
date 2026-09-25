@@ -35,7 +35,7 @@ type Row = {
 const GROUPS: { title: string; caption: string; rows: Row[] }[] = [
   {
     title: 'Blood pressure',
-    caption: 'From any recent reading — a clinic, a pharmacy, or a home monitor.',
+    caption: 'Any recent reading works: a clinic, a pharmacy or a home monitor.',
     rows: [
       { key: 'systolic_mmhg', label: 'Systolic (upper)', unit: 'mmHg', normal: [90, 120] },
       { key: 'diastolic_mmhg', label: 'Diastolic (lower)', unit: 'mmHg', normal: [60, 80] },
@@ -118,18 +118,20 @@ export default function VitalsScreen() {
       onAdvance={goNext}
       advanceLabel="Continue"
     >
-      <KeyboardAwareScreenScrollView>
+      <KeyboardAwareScreenScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.headline} accessibilityRole="header">
           Do you know any of your health numbers?
         </Text>
         <Text style={styles.subtitle}>
-          These change your risk picture more than anything else you can tell us.
-          Skip anything you do not know — just do not guess.
+          These shape your risk picture more than anything else you tell us.
+          Skip what you do not know rather than guessing.
         </Text>
 
         {GROUPS.map((group) => (
           <View key={group.title} style={styles.group}>
-            <Text style={styles.groupTitle}>{group.title}</Text>
+            <Text style={styles.groupTitle} accessibilityRole="header">
+              {group.title}
+            </Text>
             <Text style={styles.groupCaption}>{group.caption}</Text>
             {group.rows.map((row) => (
               <NumberOrUnknown
@@ -165,34 +167,36 @@ export default function VitalsScreen() {
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    paddingBottom: spacing.xl,
+  },
   headline: {
     ...typography.largeTitle,
     color: colors.textPrimary,
     marginBottom: spacing.md,
   },
   subtitle: {
-    ...typography.callout,
+    ...typography.body,
     color: colors.textSecondary,
     marginBottom: spacing.xxl,
   },
   group: {
-    marginBottom: spacing.xl,
+    marginBottom: spacing.xxl,
   },
   groupTitle: {
-    ...typography.overline,
-    color: colors.textTertiary,
+    ...typography.subtitle,
+    color: colors.textPrimary,
     marginBottom: spacing.xs,
   },
   groupCaption: {
-    ...typography.caption,
-    color: colors.textTertiary,
+    ...typography.callout,
+    color: colors.textSecondary,
     marginBottom: spacing.md,
   },
   summary: {
     padding: spacing.lg,
-    borderRadius: spacing.cardRadius,
-    backgroundColor: colors.backgroundSecondary,
-    marginBottom: spacing.xl,
+    borderRadius: spacing.cardRadiusLg,
+    backgroundColor: colors.selected,
   },
   summaryText: {
     ...typography.bodyMedium,

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { colors, spacing, typography } from '../../constants/theme';
@@ -28,6 +28,7 @@ export default function NumberField({
   onChange,
   placeholder,
 }: NumberFieldProps) {
+  const [focused, setFocused] = useState(false);
   const handleText = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) {
@@ -42,11 +43,13 @@ export default function NumberField({
     <View style={styles.wrapper}>
       <Text style={styles.label}>{label}</Text>
       {hint ? <Text style={styles.hint}>{hint}</Text> : null}
-      <View style={styles.inputRow}>
+      <View style={[styles.field, focused && styles.fieldFocused]}>
         <TextInput
           style={styles.input}
           value={value === null || value === undefined ? '' : String(value)}
           onChangeText={handleText}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           keyboardType="numeric"
           inputMode="decimal"
           placeholder={placeholder ?? '—'}
@@ -61,31 +64,41 @@ export default function NumberField({
 
 const styles = StyleSheet.create({
   wrapper: {
-    marginBottom: spacing.lg,
+    marginBottom: spacing.xl,
   },
   label: {
-    ...typography.bodyMedium,
-    color: colors.textSecondary,
+    ...typography.headline,
+    color: colors.textPrimary,
     marginBottom: spacing.xs,
   },
   hint: {
     ...typography.caption,
     color: colors.textTertiary,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
   },
-  inputRow: {
+  field: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginTop: spacing.xs,
+    paddingHorizontal: spacing.lg,
+    minHeight: 60,
+    borderRadius: spacing.inputRadius,
+    borderWidth: 1.5,
+    borderColor: colors.surfaceBorder,
+    backgroundColor: colors.surface,
+  },
+  fieldFocused: {
+    borderColor: colors.textPrimary,
   },
   input: {
     ...typography.numeric,
     color: colors.textPrimary,
     flex: 1,
     paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderRadius: spacing.inputRadius,
-    backgroundColor: colors.backgroundSecondary,
-  },
+    fontVariant: ['tabular-nums'],
+    // RN web draws its own focus ring; the field border is the ring.
+    outlineStyle: 'none',
+  } as any,
   unit: {
     ...typography.callout,
     color: colors.textSecondary,

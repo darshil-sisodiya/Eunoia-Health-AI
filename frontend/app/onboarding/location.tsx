@@ -10,13 +10,14 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 
 import OnboardingShell from '../../components/onboarding/OnboardingShell';
+import { IconButton } from '../../components/ui';
 import { useOnboardingStep } from '../../utils/useOnboardingStep';
 import {
   KARNATAKA_CITIES_FALLBACK,
   ONBOARDING_COPY,
 } from '../../constants/onboarding';
 import { getCities } from '../../utils/onboardingApi';
-import { colors, shadows, spacing, typography } from '../../constants/theme';
+import { colors, fonts, shadows, spacing, typography } from '../../constants/theme';
 
 /**
  * Step 6 of the Eunoia onboarding flow — Location personalisation.
@@ -260,22 +261,15 @@ export default function Location() {
                     <Text style={styles.modalEyebrow}>
                       {ONBOARDING_COPY.location.stateValue}
                     </Text>
-                    <Text style={styles.modalTitle}>
-                      {ONBOARDING_COPY.location.cityLabel}
+                    <Text style={styles.modalTitle} accessibilityRole="header">
+                      {ONBOARDING_COPY.location.cityPlaceholder}
                     </Text>
                   </View>
-                  <Pressable
+                  <IconButton
+                    icon="close"
+                    label="Close city picker"
                     onPress={handleClosePicker}
-                    style={styles.modalCloseBtn}
-                    accessibilityRole="button"
-                    accessibilityLabel="Close city picker"
-                  >
-                    <Ionicons
-                      name="close"
-                      size={20}
-                      color={colors.textPrimary}
-                    />
-                  </Pressable>
+                  />
                 </View>
 
                 <ScrollView
@@ -307,11 +301,13 @@ export default function Location() {
                           {city}
                         </Text>
                         {isSelected ? (
-                          <Ionicons
-                            name="checkmark"
-                            size={18}
-                            color={colors.textPrimary}
-                          />
+                          <View style={styles.cityCheck}>
+                            <Ionicons
+                              name="checkmark"
+                              size={16}
+                              color={colors.textInverse}
+                            />
+                          </View>
                         ) : null}
                       </Pressable>
                     );
@@ -370,47 +366,48 @@ class PickerErrorBoundary extends React.Component<
 
 const styles = StyleSheet.create({
   headerBlock: {
-    marginBottom: spacing.xxxl,
+    marginBottom: spacing.xxl,
   },
   headline: {
     ...typography.largeTitle,
     color: colors.textPrimary,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   subtitle: {
     ...typography.body,
     color: colors.textSecondary,
   },
   fieldGroup: {
+    gap: spacing.sm,
     marginBottom: spacing.xl,
   },
   fieldLabel: {
     ...typography.callout,
-    color: colors.textTertiary,
-    marginBottom: spacing.sm,
+    fontFamily: fonts.semibold,
+    color: colors.textPrimary,
   },
   field: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: spacing.md,
     backgroundColor: colors.surface,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: colors.surfaceBorder,
     borderRadius: spacing.inputRadius,
-    paddingVertical: spacing.lg,
     paddingHorizontal: spacing.lg,
-    minHeight: 56,
+    minHeight: 54,
   },
   fieldDisabled: {
-    backgroundColor: colors.backgroundSecondary,
-    borderColor: colors.divider,
+    backgroundColor: colors.backgroundTertiary,
+    borderColor: 'transparent',
   },
   fieldInteractive: {
     backgroundColor: colors.surface,
   },
   fieldPressed: {
-    backgroundColor: colors.surfaceHover,
-    borderColor: colors.surfaceBorderStrong,
+    borderColor: colors.textPrimary,
+    opacity: 0.85,
   },
   fieldValue: {
     ...typography.body,
@@ -425,7 +422,6 @@ const styles = StyleSheet.create({
   errorText: {
     ...typography.caption,
     color: colors.error,
-    marginTop: spacing.sm,
   },
 
   // ── Modal sheet ──────────────────────────────────────────
@@ -442,8 +438,6 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
     paddingBottom: spacing.xxl,
     maxHeight: '80%',
-    borderTopWidth: 1,
-    borderColor: colors.surfaceBorder,
     ...shadows.xl,
   },
   modalHandle: {
@@ -461,7 +455,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   modalEyebrow: {
-    ...typography.overline,
+    ...typography.callout,
     color: colors.textTertiary,
     marginBottom: spacing.xs,
   },
@@ -469,46 +463,44 @@ const styles = StyleSheet.create({
     ...typography.title,
     color: colors.textPrimary,
   },
-  modalCloseBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: spacing.inputRadius,
-    backgroundColor: colors.backgroundSecondary,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   modalList: {
     flexGrow: 0,
   },
   modalListContent: {
+    gap: spacing.xs,
     paddingBottom: spacing.lg,
   },
   cityRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.md,
+    minHeight: 52,
+    paddingHorizontal: spacing.lg,
     borderRadius: spacing.cardRadius,
-    marginBottom: spacing.xs,
-    borderWidth: 1,
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
     borderColor: 'transparent',
   },
   cityRowSelected: {
-    borderColor: colors.surfaceBorderStrong,
-    backgroundColor: colors.backgroundSecondary,
+    backgroundColor: colors.selected,
+    borderColor: colors.textPrimary,
   },
   cityRowPressed: {
-    backgroundColor: colors.surfaceHover,
+    opacity: 0.85,
   },
   cityRowText: {
     ...typography.body,
-    color: colors.textSecondary,
+    color: colors.textPrimary,
   },
   cityRowTextSelected: {
-    ...typography.bodyMedium,
-    color: colors.textPrimary,
+    fontFamily: fonts.semibold,
+  },
+  cityCheck: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.textPrimary,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

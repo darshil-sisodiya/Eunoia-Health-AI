@@ -1,8 +1,8 @@
-import React from 'react';
-import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useState } from 'react';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { colors, spacing, typography } from '../../constants/theme';
+import { colors, fonts, spacing, typography } from '../../constants/theme';
 
 export type NumberOrUnknownProps = {
   label: string;
@@ -41,6 +41,7 @@ export default function NumberOrUnknown({
   normal,
   placeholder,
 }: NumberOrUnknownProps) {
+  const [focused, setFocused] = useState(false);
   const handleText = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) {
@@ -57,24 +58,26 @@ export default function NumberOrUnknown({
         <Text style={styles.label}>{label}</Text>
         {normal ? (
           <Text style={styles.normal}>
-            {`typical ${normal[0]}-${normal[1]} ${unit}`}
+            {`Typical ${normal[0]}–${normal[1]} ${unit}`}
           </Text>
         ) : null}
       </View>
 
       {unknown ? (
         <View style={styles.unknownState}>
-          <Ionicons name="help-circle-outline" size={18} color={colors.warning} />
+          <Ionicons name="help-circle-outline" size={20} color={colors.warning} />
           <Text style={styles.unknownText}>
-            Not known — we will suggest getting this checked
+            Not known. We will suggest getting this checked.
           </Text>
         </View>
       ) : (
-        <View style={styles.inputRow}>
+        <View style={[styles.field, focused && styles.fieldFocused]}>
           <TextInput
             style={styles.input}
             value={value === null || value === undefined ? '' : String(value)}
             onChangeText={handleText}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
             keyboardType="numeric"
             inputMode="decimal"
             placeholder={placeholder ?? '—'}
@@ -85,48 +88,45 @@ export default function NumberOrUnknown({
         </View>
       )}
 
-      <TouchableOpacity
+      <Pressable
         onPress={onToggleUnknown}
-        activeOpacity={0.7}
-        accessibilityRole="button"
-        accessibilityState={{ selected: unknown }}
-        accessibilityLabel={
-          unknown ? `I do know my ${label}` : `I don't know my ${label}`
-        }
-        style={styles.toggle}
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked: unknown }}
+        accessibilityLabel={`I don't know my ${label}`}
+        hitSlop={4}
+        style={({ pressed }) => [styles.toggle, pressed && styles.togglePressed]}
       >
         <Ionicons
           name={unknown ? 'checkbox' : 'square-outline'}
-          size={16}
+          size={20}
           color={unknown ? colors.warning : colors.textTertiary}
         />
         <Text style={[styles.toggleText, unknown && styles.toggleTextActive]}>
           I don&apos;t know this
         </Text>
-      </TouchableOpacity>
+      </Pressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   wrapper: {
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    borderRadius: spacing.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    padding: spacing.lg,
+    paddingBottom: spacing.sm,
+    borderRadius: spacing.cardRadiusLg,
     backgroundColor: colors.surface,
     marginBottom: spacing.md,
   },
   wrapperUnknown: {
-    borderColor: colors.warning,
     backgroundColor: colors.warningSoft,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'baseline',
     justifyContent: 'space-between',
-    marginBottom: spacing.sm,
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
   },
   label: {
     ...typography.headline,
@@ -136,21 +136,29 @@ const styles = StyleSheet.create({
   normal: {
     ...typography.caption,
     color: colors.textTertiary,
-    marginLeft: spacing.sm,
   },
-  inputRow: {
+  field: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    minHeight: 60,
+    borderRadius: spacing.inputRadius,
+    borderWidth: 1.5,
+    borderColor: colors.surfaceBorder,
+    backgroundColor: colors.surface,
+  },
+  fieldFocused: {
+    borderColor: colors.textPrimary,
   },
   input: {
     ...typography.numeric,
     color: colors.textPrimary,
     flex: 1,
     paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderRadius: spacing.inputRadius,
-    backgroundColor: colors.backgroundSecondary,
-  },
+    fontVariant: ['tabular-nums'],
+    // RN web draws its own focus ring; the field border is the ring.
+    outlineStyle: 'none',
+  } as any,
   unit: {
     ...typography.callout,
     color: colors.textSecondary,
@@ -159,25 +167,30 @@ const styles = StyleSheet.create({
   unknownState: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: spacing.sm,
+    minHeight: 60,
     gap: spacing.sm,
   },
   unknownText: {
-    ...typography.caption,
+    ...typography.callout,
     color: colors.warning,
     flexShrink: 1,
   },
   toggle: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: spacing.sm,
-    gap: spacing.xs,
+    alignSelf: 'flex-start',
+    minHeight: 44,
+    gap: spacing.sm,
+  },
+  togglePressed: {
+    opacity: 0.7,
   },
   toggleText: {
-    ...typography.caption,
-    color: colors.textTertiary,
+    ...typography.callout,
+    color: colors.textSecondary,
   },
   toggleTextActive: {
+    fontFamily: fonts.semibold,
     color: colors.warning,
   },
 });

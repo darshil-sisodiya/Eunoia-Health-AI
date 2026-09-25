@@ -18,6 +18,10 @@ from io import BytesIO
 from typing import List, Dict, Any, Optional
 import json
 
+from profile_context import _CONTROL_LABELS, _DURATION_LABELS, _TREATMENT_LABELS
+
+_ONSET_LABELS = {'lt_50': 'before 50', '50_70': 'age 50-70', 'gt_70': 'after 70'}
+
 
 class NumberedCanvas(canvas.Canvas):
     """Custom canvas with page numbers and headers."""
@@ -261,9 +265,9 @@ def create_health_report_pdf(
             'Diagnosed Conditions',
             [[str(c.get('name', '')),
               '{0}, {1}, {2}'.format(
-                  str(c.get('diagnosed_bucket', 'unknown')).replace('_', ' '),
-                  str(c.get('control', 'unsure')) + ' control',
-                  str(c.get('treatment', 'none')).replace('_', ' '))]
+                  _DURATION_LABELS.get(c.get('diagnosed_bucket'), 'duration unknown'),
+                  _CONTROL_LABELS.get(c.get('control'), 'control unknown'),
+                  _TREATMENT_LABELS.get(c.get('treatment'), 'untreated'))]
              for c in (clinical.get('conditions') or [])],
             'None recorded',
         )
@@ -319,7 +323,7 @@ def create_health_report_pdf(
             rel = str(f.get('relation') or '').strip() or 'relation not specified'
             onset = f.get('onset_bucket')
             if onset and onset != 'unknown':
-                rel += ' (onset ' + str(onset).replace('_', '-') + ')'
+                rel += ' (onset ' + _ONSET_LABELS.get(onset, str(onset)) + ')'
             family_rows.setdefault(cond, []).append(rel)
         _table(
             'Family History',

@@ -1,17 +1,23 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
+  AccessibilityInfo,
+  Animated,
+  Easing,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import Svg, { Path } from 'react-native-svg';
 
-import { colors, spacing, typography } from '../../constants/theme';
+import { colors, fonts, spacing, typography } from '../../constants/theme';
 import { ONBOARDING_COPY } from '../../constants/onboarding';
+import { Button, Notice } from '../../components/ui';
+import { ConfidencePill, TopDrivers, toneColors } from '../../components/health/RiskBreakdown';
 import { useAuth } from '../../contexts/AuthContext';
 import { useOnboarding } from '../../contexts/OnboardingContext';
 import {
@@ -24,51 +30,34 @@ import {
 import { clearDraft } from '../../utils/onboardingDraft';
 import { buildAnalyzePayload } from '../../utils/onboardingPayload';
 
+const AnimatedPath = Animated.createAnimatedComponent(Path);
+
 /**
  * Result Screen — final step of the Eunoia onboarding flow.
  *
- * Visual contract (Requirements 15.1–15.6, 16.1–16.6):
- *   - Hero block: centered `Wellness_Score` rendered in
- *     `typography.numericLarge` with the wellness label below it,
- *     followed by a single-tone Risk_Level badge built from
- *     `colors.surface`, `colors.surfaceBorderStrong`, and
- *     `colors.textPrimary` only — no new colors are introduced.
- *   - Trend graph slot: a placeholder skeleton card driven by
- *     `colors.skeleton`, with no real-data dependency.
- *   - Six analytics cards (`spacing.cardRadiusLg`, `colors.surfaceBorder`):
- *       1. Preventive insights
- *       2. Lifestyle optimization (recommendations + diet + exercise)
- *       3. Mental wellness recommendations
- *       4. Hereditary risk indicators (driven by `contributing_factors`
- *          whose `dimension` starts with `family_history.`)
- *       5. Long-term wellness awareness
- *       6. Habit optimization recommendations
- *   - When `ai_insights_unavailable === true`, all five AI-driven cards
- *     are replaced by a single calm panel containing the
- *     `aiUnavailableMessage` copy. The deterministic Hereditary risk
- *     indicators card (Card 4) is still rendered because it is fed by
- *     the Risk Engine's `contributing_factors`, not by Gemini.
- *   - "Return to home" CTA matches the Welcome screen's primary CTA.
- *     On press, if the response carries a non-zero `report_id` the
+ * The reveal: an indigo hero with the wellness score in Young Serif, a
+ * marigold arc that sweeps to the score (still when reduced motion is on),
+ * the risk level chip and how complete the picture is. Below it, the top
+ * drivers, then the AI insight cards.
+ *
+ *   - When `ai_insights_unavailable === true`, the AI cards are replaced by
+ *     a single calm notice. The deterministic hereditary card is still
+ *     rendered because it is fed by the Risk Engine's
+ *     `contributing_factors`, not by Gemini.
+ *   - The one primary action ("Return to home") is pinned below the
+ *     scroll. On press, if the response carries a non-zero `report_id` the
  *     screen skips `POST /api/save-report` and navigates straight to
  *     `/(tabs)/home`. Otherwise it calls `saveReport(payload, token)`,
  *     awaits its resolution, then navigates. In both branches the
- *     AsyncStorage onboarding draft is flushed via `clearDraft()` and
- *     the in-memory `OnboardingContext` is `reset()` (Requirement
- *     15.7). On `saveReport` failure the screen renders an inline
- *     recoverable error block above the CTA using the existing
- *     `colors.error`/`colors.errorSoft` tokens (Requirement 18.4)
- *     and tapping the CTA again retries.
+ *     AsyncStorage onboarding draft is flushed via `clearDraft()` and the
+ *     in-memory `OnboardingContext` is `reset()` (Requirement 15.7). On
+ *     `saveReport` failure an inline error notice appears above the button
+ *     and pressing it again retries (Requirement 18.4).
  *
  * The screen receives the `AnalyzeRiskResponse` via Expo Router params
- * pushed by the analyzing screen (task 10.14). `useLocalSearchParams`
- * may type the parsed `response` as `string | string[]`, so the parser
- * handles both forms defensively and renders nothing destructive on a
- * malformed payload.
- *
- * All visuals consume tokens from `frontend/constants/theme.ts` and
- * copy from `frontend/constants/onboarding.ts`. No inline color,
- * spacing, typography, or copy literals.
+ * pushed by the analyzing screen. `useLocalSearchParams` may type the
+ * parsed `response` as `string | string[]`, so the parser handles both
+ * forms defensively and renders nothing destructive on a malformed payload.
  */
 export default function Result() {
   const params = useLocalSearchParams<{ response?: string | string[] }>();
@@ -81,7 +70,7 @@ export default function Result() {
   // gates the CTA so a double tap cannot trigger two save-report
   // requests. `saveError` flips on when the optional save-report call
   // rejects so the screen can render an inline recoverable error
-  // block above the CTA — tapping the CTA again retries.
+  // above the CTA — pressing the CTA again retries.
   const [savePending, setSavePending] = useState(false);
   const [saveError, setSaveError] = useState(false);
 
@@ -131,26 +120,25 @@ export default function Result() {
     } finally {
       setSavePending(false);
     }
-  }, [
-    draft,
-    reset,
-    response,
-    savePending,
-    token,
-  ]);
+  }, [draft, reset, response, savePending, token]);
 
   if (response === null) {
-    // Defensive fallback: if the analyzing screen failed to forward a
-    // valid response (e.g. deep link directly into /onboarding/result),
-    // render a calm empty state that still honours the brand surface
-    // and stays on monochrome neutrals.
+    // Defensive fallback: the analyzing screen failed to forward a valid
+    // response (e.g. a deep link straight into /onboarding/result).
     return (
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
         <View style={styles.fallback}>
-          <Text style={styles.fallbackEyebrow}>{ONBOARDING_COPY.result.eyebrow}</Text>
-          <Text style={styles.fallbackBody}>
-            {ONBOARDING_COPY.result.aiUnavailableMessage}
+          <Text style={styles.fallbackTitle} accessibilityRole="header">
+            Your results didn’t load here
           </Text>
+          <Text style={styles.fallbackBody}>
+            If your report was saved, you’ll find it on Home.
+          </Text>
+          <Button
+            label="Go to home"
+            onPress={() => router.replace('/(tabs)/home')}
+            style={styles.fallbackButton}
+          />
         </View>
       </SafeAreaView>
     );
@@ -161,221 +149,244 @@ export default function Result() {
   const hereditaryFactors = response.contributing_factors.filter((factor) =>
     factor.dimension.startsWith('family_history.'),
   );
+  const tone = toneColors(response.risk_level);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* ── Hero block ─────────────────────────────────── */}
-        <View style={styles.hero} accessibilityRole="header">
-          <Text style={styles.heroEyebrow}>{ONBOARDING_COPY.result.eyebrow}</Text>
-          <Text
-            style={styles.wellnessScore}
-            accessibilityLabel={`${ONBOARDING_COPY.result.wellnessLabel} ${response.wellness_score}`}
-          >
-            {response.wellness_score}
-          </Text>
-          <Text style={styles.wellnessLabel}>
-            {ONBOARDING_COPY.result.wellnessLabel}
-          </Text>
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <Text style={styles.pageTitle} accessibilityRole="header">
+          Your health profile is ready
+        </Text>
 
+        {/* ── Hero ───────────────────────────────────────── */}
+        <View style={styles.hero}>
+          <Text style={styles.heroLabel}>{ONBOARDING_COPY.result.scoreLabel}</Text>
+          <ScoreArc score={response.risk_score} />
           <View
-            style={styles.riskBadge}
-            accessibilityRole="text"
-            accessibilityLabel={`${ONBOARDING_COPY.result.riskLabel} ${response.risk_level}`}
+            style={[styles.riskChip, { backgroundColor: tone.bg }]}
+            accessible
+            accessibilityLabel={`${ONBOARDING_COPY.result.riskLabel}: ${response.risk_level}`}
           >
-            <Text style={styles.riskBadgeLabel}>
-              {`${ONBOARDING_COPY.result.riskLabel} · `}
+            <View style={[styles.riskDot, { backgroundColor: tone.fg }]} />
+            <Text style={[styles.riskChipText, { color: tone.fg }]}>
+              {`${response.risk_level} risk`}
             </Text>
-            <Text style={styles.riskBadgeValue}>{response.risk_level}</Text>
+          </View>
+          <View style={styles.heroPill}>
+            <ConfidencePill report={response} />
           </View>
         </View>
 
-        {/* ── Trend graph placeholder ────────────────────── */}
-        <View
-          style={styles.trendPlaceholder}
-          accessibilityRole="text"
-          accessibilityLabel={ONBOARDING_COPY.result.sections.trendPlaceholder}
-        >
-          <Text style={styles.trendPlaceholderText}>
-            {ONBOARDING_COPY.result.sections.trendPlaceholder}
+        <View style={styles.stack}>
+          <TopDrivers report={response} limit={3} linked={false} />
+
+          <Text style={styles.sectionTitle} accessibilityRole="header">
+            Your personal insights
           </Text>
-        </View>
 
-        {/* ── Analytics cards ────────────────────────────── */}
-        {aiUnavailable ? (
-          <AiUnavailablePanel />
-        ) : (
-          <>
-            <InsightCard
-              title={ONBOARDING_COPY.result.sections.preventiveInsights}
-              body={insights?.preventive_health_insights}
-            />
-            <LifestyleCard insights={insights} />
-            <InsightCard
-              title={ONBOARDING_COPY.result.sections.mentalWellness}
-              body={insights?.mental_wellness_improvements}
-            />
-          </>
-        )}
-
-        {/* The hereditary indicators card is deterministic — it is
-            driven by `contributing_factors` from the Risk Engine, so it
-            is rendered in both happy-path and AI-unavailable modes. */}
-        <HereditaryCard factors={hereditaryFactors} />
-
-        {!aiUnavailable && (
-          <>
-            <InsightCard
-              title={ONBOARDING_COPY.result.sections.longTermAwareness}
-              body={insights?.long_term_wellness_awareness}
-            />
-            <InsightCard
-              title={ONBOARDING_COPY.result.sections.habitOptimization}
-              body={insights?.habit_optimization_recommendations}
-            />
-          </>
-        )}
-
-        {/* ── Primary CTA ────────────────────────────────── */}
-        {saveError && (
-          <View
-            style={styles.saveErrorBlock}
-            accessibilityRole="alert"
-            accessibilityLiveRegion="polite"
-          >
-            <Text style={styles.saveErrorText}>
-              {ONBOARDING_COPY.result.saveErrorMessage}
-            </Text>
-          </View>
-        )}
-        <TouchableOpacity
-          style={[styles.primaryCta, savePending && styles.primaryCtaDisabled]}
-          onPress={handleReturnHome}
-          activeOpacity={0.9}
-          disabled={savePending}
-          accessibilityRole="button"
-          accessibilityLabel={ONBOARDING_COPY.result.primaryCta}
-          accessibilityState={{ disabled: savePending, busy: savePending }}
-        >
-          {savePending ? (
-            <ActivityIndicator size="small" color={colors.textInverse} />
+          {aiUnavailable ? (
+            <Notice tone="info">{ONBOARDING_COPY.result.aiUnavailableMessage}</Notice>
           ) : (
-            <Text style={styles.primaryCtaText}>
-              {ONBOARDING_COPY.result.primaryCta}
-            </Text>
+            <>
+              <InsightCard
+                title={ONBOARDING_COPY.result.sections.preventiveInsights}
+                body={insights?.preventive_health_insights}
+              />
+              <LifestyleCard insights={insights} />
+              <InsightCard
+                title={ONBOARDING_COPY.result.sections.mentalWellness}
+                body={insights?.mental_wellness_improvements}
+              />
+            </>
           )}
-        </TouchableOpacity>
+
+          {/* Deterministic — driven by `contributing_factors` from the Risk
+              Engine, so it renders in both happy-path and AI-unavailable modes. */}
+          <HereditaryCard factors={hereditaryFactors} />
+
+          {!aiUnavailable && (
+            <>
+              <InsightCard
+                title={ONBOARDING_COPY.result.sections.longTermAwareness}
+                body={insights?.long_term_wellness_awareness}
+              />
+              <InsightCard
+                title={ONBOARDING_COPY.result.sections.habitOptimization}
+                body={insights?.habit_optimization_recommendations}
+              />
+            </>
+          )}
+        </View>
       </ScrollView>
+
+      {/* ── Primary action, always in reach ──────────────── */}
+      <View style={styles.footer}>
+        {saveError ? (
+          <Notice tone="error">We couldn’t save your report. Check your connection and press the button again.</Notice>
+        ) : null}
+        <Button
+          label={ONBOARDING_COPY.result.primaryCta}
+          onPress={handleReturnHome}
+          loading={savePending}
+        />
+      </View>
     </SafeAreaView>
   );
 }
 
-// ── Card primitives ──────────────────────────────────────────────
+// ── Score arc ────────────────────────────────────────────────────
+// Sweeps up to the score once on arrival; skipped under reduced motion.
 
-type InsightCardProps = {
-  title: string;
-  body: string | undefined | null;
-};
+function ScoreArc({ score }: { score: number }) {
+  const width = 264;
+  const stroke = 14;
+  const r = (width - stroke) / 2;
+  const cy = r + stroke / 2;
+  const height = cy + stroke / 2;
+  const arcLength = Math.PI * r;
+  const progress = Math.max(0, Math.min(score / 100, 1));
+  const d = `M ${stroke / 2} ${cy} A ${r} ${r} 0 0 1 ${width - stroke / 2} ${cy}`;
 
-function InsightCard({ title, body }: InsightCardProps) {
-  // If the AI section came back empty (whitespace-only would have been
-  // mapped to `ai_insights_unavailable: true` upstream, but a section
-  // can still be missing for forwards-compat), suppress the card to
-  // keep the screen calm rather than rendering an empty container.
-  const trimmed = typeof body === 'string' ? body.trim() : '';
-  if (!trimmed) return null;
+  const sweep = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .catch(() => false)
+      .then((reduce) => {
+        if (!alive) return;
+        if (reduce) {
+          sweep.setValue(progress);
+          return;
+        }
+        Animated.timing(sweep, {
+          toValue: progress,
+          duration: 1300,
+          delay: 250,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: false,
+        }).start();
+      });
+    return () => {
+      alive = false;
+    };
+  }, [progress, sweep]);
+
+  const dashOffset = sweep.interpolate({ inputRange: [0, 1], outputRange: [arcLength, 0] });
+
   return (
-    <View style={styles.card} accessibilityRole="summary">
-      <Text style={styles.cardTitle}>{title}</Text>
-      <Text style={styles.cardBody}>{trimmed}</Text>
+    <View
+      style={styles.arc}
+      accessible
+      accessibilityLabel={`${ONBOARDING_COPY.result.scoreLabel} ${score} ${ONBOARDING_COPY.result.scoreOutOf}`}
+    >
+      <Svg width={width} height={height}>
+        <Path d={d} stroke="rgba(255,255,255,0.12)" strokeWidth={stroke} fill="none" strokeLinecap="round" />
+        <AnimatedPath
+          d={d}
+          stroke={colors.accent}
+          strokeWidth={stroke}
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={`${arcLength} ${arcLength}`}
+          strokeDashoffset={dashOffset as any}
+        />
+      </Svg>
+      <View style={styles.arcCenter}>
+        <Text style={styles.score}>{score}</Text>
+        <Text style={styles.scoreOutOf}>{ONBOARDING_COPY.result.scoreOutOf}</Text>
+      </View>
     </View>
   );
 }
 
-type LifestyleCardProps = {
-  insights: GeminiInsights | null | undefined;
-};
+// ── Cards ────────────────────────────────────────────────────────
 
-function LifestyleCard({ insights }: LifestyleCardProps) {
-  // Lifestyle optimization is the condensed view of three Gemini
-  // sections (Requirement 15.1, design § "Result Screen"): lifestyle
-  // recommendations, diet suggestions, and exercise guidance. They are
-  // rendered as up to three sub-paragraphs so each retains its voice
-  // while still living inside one analytics card.
+/** Long AI sections start folded so the page stays scannable. */
+const COLLAPSE_AT = 360;
+
+function InsightCard({ title, body }: { title: string; body: string | undefined | null }) {
+  const [open, setOpen] = useState(false);
+  // A section can be missing for forwards-compat; suppress the card rather
+  // than render an empty container.
+  const trimmed = typeof body === 'string' ? body.trim() : '';
+  if (!trimmed) return null;
+  const long = trimmed.length > COLLAPSE_AT;
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle} accessibilityRole="header">
+        {title}
+      </Text>
+      <Text style={styles.cardBody} numberOfLines={long && !open ? 5 : undefined}>
+        {trimmed}
+      </Text>
+      {long ? (
+        <Pressable
+          onPress={() => setOpen((o) => !o)}
+          hitSlop={10}
+          style={({ pressed }) => [styles.more, pressed && styles.pressed]}
+          accessibilityRole="button"
+          accessibilityLabel={open ? `Show less of ${title}` : `Read all of ${title}`}
+          accessibilityState={{ expanded: open }}
+        >
+          <Text style={styles.moreText}>{open ? 'Show less' : 'Read more'}</Text>
+          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textPrimary} />
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+function LifestyleCard({ insights }: { insights: GeminiInsights | null | undefined }) {
+  // Lifestyle optimization condenses three Gemini sections into one card,
+  // each under its own small heading so it can be scanned.
   const sections = [
-    insights?.lifestyle_recommendations,
-    insights?.diet_suggestions,
-    insights?.exercise_guidance,
+    { label: 'Daily habits', text: insights?.lifestyle_recommendations },
+    { label: 'Diet', text: insights?.diet_suggestions },
+    { label: 'Exercise', text: insights?.exercise_guidance },
   ]
-    .map((value) => (typeof value === 'string' ? value.trim() : ''))
-    .filter((value) => value.length > 0);
+    .map((s) => ({ ...s, text: typeof s.text === 'string' ? s.text.trim() : '' }))
+    .filter((s) => s.text.length > 0);
 
   if (sections.length === 0) return null;
 
   return (
-    <View style={styles.card} accessibilityRole="summary">
-      <Text style={styles.cardTitle}>
+    <View style={styles.card}>
+      <Text style={styles.cardTitle} accessibilityRole="header">
         {ONBOARDING_COPY.result.sections.lifestyleOptimization}
       </Text>
-      {sections.map((section, index) => (
-        <Text
-          key={`lifestyle-${index}`}
-          style={[
-            styles.cardBody,
-            index < sections.length - 1 && styles.cardBodyParagraph,
-          ]}
-        >
-          {section}
-        </Text>
+      {sections.map((section) => (
+        <View key={section.label} style={styles.subsection}>
+          <Text style={styles.subsectionLabel}>{section.label}</Text>
+          <Text style={styles.cardBody}>{section.text}</Text>
+        </View>
       ))}
     </View>
   );
 }
 
-type HereditaryCardProps = {
-  factors: ContributingFactor[];
-};
-
-function HereditaryCard({ factors }: HereditaryCardProps) {
-  // The hereditary indicators card is always rendered — even when
-  // there are zero family-history factors — so the user has a stable
-  // anchor that "your hereditary risk indicators are ready", which is
-  // the deterministic guarantee the AI-unavailable copy refers to.
+function HereditaryCard({ factors }: { factors: ContributingFactor[] }) {
+  // Always rendered, even with zero family-history factors, so the
+  // "your risk indicators are ready" promise has something to point at.
   return (
-    <View style={styles.card} accessibilityRole="summary">
-      <Text style={styles.cardTitle}>
+    <View style={styles.card}>
+      <Text style={styles.cardTitle} accessibilityRole="header">
         {ONBOARDING_COPY.result.sections.hereditaryIndicators}
       </Text>
       {factors.length === 0 ? (
-        <Text style={styles.cardBody}>—</Text>
+        <Text style={styles.cardBody}>No family history recorded.</Text>
       ) : (
-        factors.map((factor) => (
+        factors.map((factor, index) => (
           <View
             key={factor.dimension}
-            style={styles.hereditaryRow}
-            accessibilityRole="text"
-            accessibilityLabel={`${extractCondition(factor.dimension)}, ${factor.component}`}
+            style={[styles.hereditaryRow, index > 0 && styles.rowDivider]}
+            accessible
+            accessibilityLabel={`${extractCondition(factor.dimension)}, adds ${factor.delta}`}
           >
-            <Text style={styles.hereditaryCondition}>
-              {extractCondition(factor.dimension)}
-            </Text>
-            <Text style={styles.hereditaryComponent}>{factor.component}</Text>
+            <Text style={styles.hereditaryCondition}>{extractCondition(factor.dimension)}</Text>
+            <Text style={styles.hereditaryDelta}>{`+${factor.delta}`}</Text>
           </View>
         ))
       )}
-    </View>
-  );
-}
-
-function AiUnavailablePanel() {
-  return (
-    <View style={styles.aiUnavailablePanel} accessibilityRole="text">
-      <Text style={styles.aiUnavailableText}>
-        {ONBOARDING_COPY.result.aiUnavailableMessage}
-      </Text>
     </View>
   );
 }
@@ -390,9 +401,7 @@ function AiUnavailablePanel() {
  * malformed JSON) returns `null` so the screen renders a calm empty
  * state rather than crashing.
  */
-function parseResponseParam(
-  raw: string | string[] | undefined,
-): AnalyzeRiskResponse | null {
+function parseResponseParam(raw: string | string[] | undefined): AnalyzeRiskResponse | null {
   if (raw == null) return null;
   const value = Array.isArray(raw) ? raw[0] : raw;
   if (typeof value !== 'string' || value.length === 0) return null;
@@ -408,17 +417,10 @@ function parseResponseParam(
   }
 }
 
-/**
- * `family_history.<Condition>` → `<Condition>`. For dimensions that do
- * not match the prefix (defensive guard; the caller already filters by
- * prefix) the original string is returned unchanged so nothing is lost.
- */
+/** `family_history.<Condition>` → `<Condition>`. */
 function extractCondition(dimension: string): string {
   const prefix = 'family_history.';
-  if (dimension.startsWith(prefix)) {
-    return dimension.slice(prefix.length);
-  }
-  return dimension;
+  return dimension.startsWith(prefix) ? dimension.slice(prefix.length) : dimension;
 }
 
 const styles = StyleSheet.create({
@@ -429,76 +431,94 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: spacing.screenPadding,
     paddingTop: spacing.xxl,
-    paddingBottom: spacing.xxxl,
+    paddingBottom: spacing.xxl,
   },
-  // ── Hero ────────────────────────────────────────────────────────
-  hero: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: spacing.xxl,
+  pressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
   },
-  heroEyebrow: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: spacing.lg,
-  },
-  wellnessScore: {
-    ...typography.numericLarge,
+  pageTitle: {
+    ...typography.largeTitle,
     color: colors.textPrimary,
-    textAlign: 'center',
-  },
-  wellnessLabel: {
-    ...typography.callout,
-    color: colors.textSecondary,
-    marginTop: spacing.sm,
-    marginBottom: spacing.lg,
-  },
-  riskBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorderStrong,
-    borderRadius: spacing.chipRadius,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-  },
-  riskBadgeLabel: {
-    ...typography.callout,
-    color: colors.textTertiary,
-  },
-  riskBadgeValue: {
-    ...typography.callout,
-    color: colors.textPrimary,
-    fontWeight: '700',
-  },
-  // ── Trend placeholder ───────────────────────────────────────────
-  trendPlaceholder: {
-    height: 140,
-    backgroundColor: colors.skeleton,
-    borderRadius: spacing.cardRadiusLg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: spacing.lg,
     marginBottom: spacing.xl,
   },
-  trendPlaceholderText: {
-    ...typography.callout,
-    color: colors.textTertiary,
+
+  // ── Hero ────────────────────────────────────────────────────────
+  hero: {
+    backgroundColor: colors.inkSurface,
+    borderRadius: spacing.cardRadiusXl,
+    paddingTop: spacing.xl,
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.xxl,
+    alignItems: 'center',
   },
+  heroLabel: {
+    ...typography.headline,
+    color: colors.textInverse,
+    alignSelf: 'flex-start',
+    marginBottom: spacing.xl,
+  },
+  arc: {
+    alignItems: 'center',
+  },
+  arcCenter: {
+    position: 'absolute',
+    bottom: -6,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  score: {
+    ...typography.mega,
+    fontSize: 80,
+    lineHeight: 84,
+    color: colors.textInverse,
+    fontVariant: ['tabular-nums'],
+  },
+  scoreOutOf: {
+    ...typography.caption,
+    color: colors.textInverseMuted,
+  },
+  riskChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.md,
+    borderRadius: spacing.chipRadius,
+    marginTop: spacing.xxl,
+  },
+  riskDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  riskChipText: {
+    ...typography.callout,
+    fontFamily: fonts.semibold,
+  },
+  heroPill: {
+    marginTop: spacing.md,
+    alignItems: 'center',
+  },
+
   // ── Cards ───────────────────────────────────────────────────────
+  stack: {
+    gap: spacing.md,
+    marginTop: spacing.md,
+  },
+  sectionTitle: {
+    ...typography.title,
+    color: colors.textPrimary,
+    marginTop: spacing.lg,
+  },
   card: {
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
     borderRadius: spacing.cardRadiusLg,
     padding: spacing.xl,
-    marginBottom: spacing.lg,
   },
   cardTitle: {
-    ...typography.headline,
+    ...typography.title,
     color: colors.textPrimary,
     marginBottom: spacing.sm,
   },
@@ -506,87 +526,80 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textSecondary,
   },
-  cardBodyParagraph: {
-    marginBottom: spacing.md,
+  more: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 4,
+    minHeight: 32,
+    marginTop: spacing.sm,
   },
-  // ── Hereditary rows ─────────────────────────────────────────────
+  moreText: {
+    ...typography.callout,
+    fontFamily: fonts.semibold,
+    color: colors.textPrimary,
+  },
+  subsection: {
+    marginTop: spacing.md,
+  },
+  subsectionLabel: {
+    ...typography.headline,
+    color: colors.textPrimary,
+    marginBottom: 2,
+  },
+  rowDivider: {
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+  },
   hereditaryRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    minHeight: 48,
     paddingVertical: spacing.sm,
+  },
+  hereditaryCondition: {
+    ...typography.bodyMedium,
+    color: colors.textPrimary,
+    flex: 1,
+  },
+  hereditaryDelta: {
+    ...typography.headline,
+    color: colors.textSecondary,
+    fontVariant: ['tabular-nums'],
+  },
+
+  // ── Footer ──────────────────────────────────────────────────────
+  footer: {
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
+    gap: spacing.md,
+    backgroundColor: colors.background,
     borderTopWidth: 1,
     borderTopColor: colors.divider,
   },
-  hereditaryCondition: {
-    ...typography.body,
-    color: colors.textPrimary,
-    fontWeight: '600',
-  },
-  hereditaryComponent: {
-    ...typography.caption,
-    color: colors.textTertiary,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  // ── AI unavailable panel ────────────────────────────────────────
-  aiUnavailablePanel: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    borderRadius: spacing.cardRadiusLg,
-    padding: spacing.xl,
-    marginBottom: spacing.lg,
-  },
-  aiUnavailableText: {
-    ...typography.body,
-    color: colors.textSecondary,
-  },
-  // ── Primary CTA (matches welcome screen) ────────────────────────
-  primaryCta: {
-    backgroundColor: colors.inkSurface,
-    borderRadius: spacing.buttonRadius,
-    paddingVertical: spacing.lg,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: spacing.lg,
-  },
-  primaryCtaDisabled: {
-    opacity: 0.7,
-  },
-  primaryCtaText: {
-    ...typography.headline,
-    color: colors.textInverse,
-  },
-  // ── Inline save-report error (Requirement 18.4) ─────────────────
-  saveErrorBlock: {
-    backgroundColor: colors.errorSoft,
-    borderWidth: 1,
-    borderColor: colors.error,
-    borderRadius: spacing.cardRadiusLg,
-    padding: spacing.lg,
-    marginTop: spacing.md,
-  },
-  saveErrorText: {
-    ...typography.callout,
-    color: colors.error,
-    textAlign: 'center',
-  },
+
   // ── Fallback empty state ────────────────────────────────────────
   fallback: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.screenPadding,
+    gap: spacing.sm,
   },
-  fallbackEyebrow: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: spacing.lg,
+  fallbackTitle: {
+    ...typography.title,
+    color: colors.textPrimary,
+    textAlign: 'center',
   },
   fallbackBody: {
     ...typography.body,
     color: colors.textSecondary,
     textAlign: 'center',
+  },
+  fallbackButton: {
+    alignSelf: 'stretch',
+    marginTop: spacing.lg,
   },
 });

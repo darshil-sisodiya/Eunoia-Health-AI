@@ -22,9 +22,9 @@ from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 # Outer cap on the Gemini call inside this service module (Requirement 14.4).
-# The /api/analyze-risk endpoint further constrains the wait to 15 s on top of
-# this 20 s budget so the API response stays under 20 s end-to-end.
-GEMINI_TIMEOUT_SECONDS: int = 20
+# Must stay under the app's 30 s analyzing-screen timeout with room for the
+# risk engine and DB write; gemini-2.5-flash measured 11-17 s for this prompt.
+GEMINI_TIMEOUT_SECONDS: int = 24
 
 # Type of the injected Gemini callable. ``server.gemini_generate`` matches this
 # signature: ``(system_instruction, user_prompt) -> awaitable raw text``.
@@ -235,6 +235,10 @@ _DENYLIST_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Splits after sentence-ending punctuation, capturing the whitespace so
+# even indices are sentences and odd indices are the separators.
+_SENTENCE_SPLIT = re.compile(r"((?<=[.!?])\s+)")
+
 
 def scrub_diagnosis_language(text: str) -> str:
     """Replace every denylisted phrase in ``text`` with ``SOFT_REPLACEMENT``.
@@ -250,7 +254,14 @@ def scrub_diagnosis_language(text: str) -> str:
     """
     if not text:
         return text
-    return _DENYLIST_PATTERN.sub(SOFT_REPLACEMENT, text)
+    # Replace the whole sentence, not just the phrase: splicing the soft line
+    # into the middle of one produced "...activity, Discuss this with your
+    # doctor.a solid foundation". Separators are kept so spacing survives.
+    parts = _SENTENCE_SPLIT.split(text)
+    for i in range(0, len(parts), 2):
+        if _DENYLIST_PATTERN.search(parts[i]):
+            parts[i] = SOFT_REPLACEMENT
+    return "".join(parts)
 
 
 # ---------------------------------------------------------------------------

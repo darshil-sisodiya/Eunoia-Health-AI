@@ -1,7 +1,8 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
-import { colors, spacing, typography } from '../../constants/theme';
+import { colors, fonts, spacing, typography } from '../../constants/theme';
 
 export type SegmentedOption<T extends string> = {
   value: T;
@@ -26,7 +27,10 @@ export type SegmentedRowProps<T extends string> = {
  * single condition at once, so they need something denser — otherwise opening
  * one condition pushes everything else off the screen.
  *
- * Uses only design tokens; the sole numeric literal is the flex basis.
+ * Selected segments match `ChoiceCard`: pale indigo tint, indigo border and a
+ * check. Unlike ChoiceCard, resting segments keep a light border, because
+ * this row also sits inside white cards (condition and family editors) where
+ * a borderless white segment would disappear.
  */
 export default function SegmentedRow<T extends string>({
   label,
@@ -43,22 +47,28 @@ export default function SegmentedRow<T extends string>({
         {options.map((option) => {
           const selected = option.value === value;
           return (
-            <TouchableOpacity
+            <Pressable
               key={option.value}
               onPress={() => onChange(option.value)}
-              activeOpacity={0.85}
               accessibilityRole="button"
               accessibilityState={{ selected }}
               accessibilityLabel={`${label}: ${option.label}`}
-              style={[styles.segment, selected && styles.segmentSelected]}
+              style={({ pressed }) => [
+                styles.segment,
+                selected && styles.segmentSelected,
+                pressed && styles.segmentPressed,
+              ]}
             >
+              {selected ? (
+                <Ionicons name="checkmark" size={16} color={colors.textPrimary} />
+              ) : null}
               <Text
                 style={[styles.segmentLabel, selected && styles.segmentLabelSelected]}
                 numberOfLines={2}
               >
                 {option.label}
               </Text>
-            </TouchableOpacity>
+            </Pressable>
           );
         })}
       </View>
@@ -68,45 +78,55 @@ export default function SegmentedRow<T extends string>({
 
 const styles = StyleSheet.create({
   wrapper: {
-    marginBottom: spacing.lg,
+    marginBottom: spacing.xl,
   },
   label: {
-    ...typography.bodyMedium,
-    color: colors.textSecondary,
+    ...typography.headline,
+    color: colors.textPrimary,
     marginBottom: spacing.xs,
   },
   hint: {
     ...typography.caption,
     color: colors.textTertiary,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
   },
   row: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.xs,
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
   segment: {
     flexGrow: 1,
     flexBasis: '30%',
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    borderRadius: spacing.buttonRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    backgroundColor: colors.surface,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: spacing.xs,
+    minHeight: 44,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: colors.surfaceBorder,
+    backgroundColor: colors.surface,
   },
   segmentSelected: {
-    backgroundColor: colors.inkSurface,
-    borderColor: colors.inkSurface,
+    backgroundColor: colors.selected,
+    borderColor: colors.textPrimary,
+  },
+  segmentPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
   },
   segmentLabel: {
-    ...typography.caption,
+    ...typography.callout,
     color: colors.textSecondary,
     textAlign: 'center',
+    flexShrink: 1,
   },
   segmentLabelSelected: {
-    color: colors.textInverse,
+    fontFamily: fonts.semibold,
+    color: colors.textPrimary,
   },
 });

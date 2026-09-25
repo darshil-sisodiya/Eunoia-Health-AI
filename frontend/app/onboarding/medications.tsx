@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 
 import OnboardingShell from '../../components/onboarding/OnboardingShell';
 import KeyboardAwareScreenScrollView from '../../components/KeyboardAwareScreenScrollView';
@@ -42,33 +42,35 @@ export default function MedicationsScreen() {
     <OnboardingShell
       step={step}
       totalSteps={totalSteps}
-      eyebrow="Medicines & allergies"
+      eyebrow="Medicines and allergies"
       canAdvance
       onBack={goBack}
       onAdvance={goNext}
       advanceLabel="Continue"
     >
-      <KeyboardAwareScreenScrollView>
+      <KeyboardAwareScreenScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.headline} accessibilityRole="header">
           What do you take, and what do you react to?
         </Text>
         <Text style={styles.subtitle}>
-          We check new prescriptions against both of these, so it is worth
-          being complete here.
+          We check every new prescription against both lists, so include
+          everything you can.
         </Text>
 
-        <Text style={styles.sectionLabel}>Medications</Text>
+        <Text style={styles.sectionLabel} accessibilityRole="header">
+          Medications
+        </Text>
         <MedicationsEditor
           value={draft.medical.medications}
           onChange={setMedications}
           conditionNames={conditionNames}
         />
 
-        <View style={styles.divider} />
-
-        <Text style={styles.sectionLabel}>Allergies</Text>
+        <Text style={[styles.sectionLabel, styles.sectionSpaced]} accessibilityRole="header">
+          Allergies
+        </Text>
         <Text style={styles.sectionCaption}>
-          Especially medicines. This is what lets us warn you about a new
+          Medicine allergies matter most. They are how we warn you about a new
           prescription.
         </Text>
         <AllergiesEditor value={draft.medical.allergy_entries} onChange={setAllergies} />
@@ -78,29 +80,30 @@ export default function MedicationsScreen() {
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    paddingBottom: spacing.xl,
+  },
   headline: {
     ...typography.largeTitle,
     color: colors.textPrimary,
     marginBottom: spacing.md,
   },
   subtitle: {
-    ...typography.callout,
+    ...typography.body,
     color: colors.textSecondary,
     marginBottom: spacing.xl,
   },
   sectionLabel: {
-    ...typography.overline,
-    color: colors.textTertiary,
+    ...typography.subtitle,
+    color: colors.textPrimary,
     marginBottom: spacing.sm,
   },
-  sectionCaption: {
-    ...typography.caption,
-    color: colors.textTertiary,
-    marginBottom: spacing.md,
+  sectionSpaced: {
+    marginTop: spacing.xxxl,
   },
-  divider: {
-    height: 1,
-    backgroundColor: colors.divider,
-    marginVertical: spacing.xxl,
+  sectionCaption: {
+    ...typography.callout,
+    color: colors.textSecondary,
+    marginBottom: spacing.md,
   },
 });
