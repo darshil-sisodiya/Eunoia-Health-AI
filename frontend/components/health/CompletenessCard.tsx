@@ -1,9 +1,10 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 
-import { colors, spacing, typography } from '../../constants/theme';
+import { colors, fonts, spacing, typography } from '../../constants/theme';
+import { tap } from '../ui';
 import { routeForSection } from '../../utils/riskView';
 import type { Completeness } from '../../utils/onboardingApi';
 
@@ -21,6 +22,8 @@ export type CompletenessCardProps = {
  * much each one would actually improve the assessment. The percentage and the
  * suggestion are both computed server-side so they can never disagree with
  * the risk engine's own confidence figure.
+ *
+ * No outer margin: callers own the spacing between cards.
  */
 export default function CompletenessCard({
   completeness,
@@ -30,31 +33,48 @@ export default function CompletenessCard({
   if (hideWhenComplete && completeness.percent >= 95) return null;
 
   const next = completeness.next_best;
+  const percent = Math.max(0, Math.min(100, completeness.percent));
 
   return (
     <View style={styles.card}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Your profile</Text>
-        <Text style={styles.percent}>{`${completeness.percent}%`}</Text>
+      <View
+        style={styles.header}
+        accessible
+        accessibilityLabel={`Your profile is ${percent} percent complete`}
+      >
+        <View style={styles.headerText}>
+          <Text style={styles.title}>Your profile</Text>
+          <Text style={styles.caption}>
+            {next ? 'More detail makes your score more accurate' : 'Complete'}
+          </Text>
+        </View>
+        <Text style={styles.percent}>{`${percent}%`}</Text>
       </View>
 
       <View style={styles.track}>
-        <View style={[styles.fill, { width: `${Math.max(2, completeness.percent)}%` }]} />
+        <View style={[styles.fill, { width: `${Math.max(2, percent)}%` }]} />
       </View>
 
       {next ? (
-        <TouchableOpacity
-          style={styles.next}
-          onPress={() => router.push(routeForSection(next.section_id) as never)}
+        <Pressable
+          style={({ pressed }) => [styles.next, pressed && styles.pressed]}
+          onPress={() => {
+            tap();
+            router.push(routeForSection(next.section_id) as never);
+          }}
           accessibilityRole="button"
           accessibilityLabel={next.cta}
+          accessibilityHint={next.body}
         >
+          <View style={styles.nextIcon}>
+            <Ionicons name="add" size={20} color={colors.textPrimary} />
+          </View>
           <View style={styles.nextText}>
             <Text style={styles.nextTitle}>{next.title}</Text>
             <Text style={styles.nextBody}>{next.body}</Text>
           </View>
-          <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
-        </TouchableOpacity>
+          <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+        </Pressable>
       ) : (
         <Text style={styles.done}>Everything we need is recorded.</Text>
       )}
@@ -64,42 +84,66 @@ export default function CompletenessCard({
 
 const styles = StyleSheet.create({
   card: {
-    padding: spacing.lg,
+    padding: spacing.xl,
     borderRadius: spacing.cardRadiusLg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
     backgroundColor: colors.surface,
-    marginBottom: spacing.lg,
   },
   header: {
     flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    marginBottom: spacing.sm,
+    alignItems: 'flex-end',
+    gap: spacing.md,
+    marginBottom: spacing.md,
+  },
+  headerText: {
+    flex: 1,
   },
   title: {
-    ...typography.overline,
+    ...typography.title,
+    color: colors.textPrimary,
+  },
+  caption: {
+    ...typography.caption,
     color: colors.textTertiary,
+    marginTop: 2,
   },
   percent: {
     ...typography.numeric,
     color: colors.textPrimary,
+    fontVariant: ['tabular-nums'],
   },
   track: {
-    height: 4,
-    borderRadius: 2,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: colors.backgroundTertiary,
     overflow: 'hidden',
-    marginBottom: spacing.lg,
   },
   fill: {
     height: '100%',
+    borderRadius: 4,
     backgroundColor: colors.accent,
   },
   next: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
+    marginTop: spacing.lg,
+    minHeight: 64,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    borderRadius: spacing.cardRadius,
+    backgroundColor: colors.background,
+  },
+  pressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
+  },
+  nextIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   nextText: {
     flex: 1,
@@ -107,14 +151,17 @@ const styles = StyleSheet.create({
   nextTitle: {
     ...typography.headline,
     color: colors.textPrimary,
-    marginBottom: spacing.xs,
   },
   nextBody: {
     ...typography.caption,
+    fontFamily: fonts.regular,
     color: colors.textSecondary,
+    marginTop: 2,
   },
   done: {
-    ...typography.caption,
+    ...typography.callout,
+    fontFamily: fonts.regular,
     color: colors.textSecondary,
+    marginTop: spacing.lg,
   },
 });

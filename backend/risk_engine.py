@@ -128,6 +128,16 @@ TREATMENT_MULT: Dict[str, float] = {
     'none': 1.5,
 }
 
+# Plain-English wording for the factor explanations the app displays.
+DURATION_TEXT = {'lt_1y': 'under a year', '1_5y': '1-5 years', '5_10y': '5-10 years',
+                 'gt_10y': 'over 10 years', 'unknown': 'duration unknown'}
+CONTROL_TEXT = {'well': 'well controlled', 'partly': 'partly controlled',
+                'poorly': 'poorly controlled', 'unsure': 'control unsure'}
+TREATMENT_TEXT = {'both': 'medication and lifestyle', 'medication': 'on medication',
+                  'lifestyle': 'lifestyle changes only', 'none': 'untreated'}
+ONSET_TEXT = {'lt_50': 'started before 50', '50_70': 'started at 50-70',
+              'gt_70': 'started after 70', 'unknown': 'onset unknown'}
+
 # Without this ceiling, 'untreated' x 'unsure' compounds to 1.875 and an
 # untreated condition of unknown control outranks a long-standing, actively
 # managed one. Multiplicative uncertainty needs a stop.
@@ -508,11 +518,11 @@ def _accumulate(payload: Dict[str, Any]) -> Tuple[Dict[str, int], List[Dict[str,
         add(
             'condition.' + _norm(name), 'conditions', condition_score(entry),
             label=name, multiplier=applied,
-            explanation='{0} duration, {1} control, treatment: {2}'.format(
-                entry.get('diagnosed_bucket') or 'unknown',
-                entry.get('control') or 'unsure',
-                entry.get('treatment') or 'none',
-            ),
+            explanation='{0}, {1}, {2}'.format(
+                DURATION_TEXT.get(entry.get('diagnosed_bucket') or 'unknown', entry.get('diagnosed_bucket')),
+                CONTROL_TEXT.get(entry.get('control') or 'unsure', entry.get('control')),
+                TREATMENT_TEXT.get(entry.get('treatment') or 'none', entry.get('treatment')),
+            ).capitalize(),
         )
 
     # -- cardiovascular -----------------------------------------------------
@@ -656,7 +666,7 @@ def _accumulate(payload: Dict[str, Any]) -> Tuple[Dict[str, int], List[Dict[str,
         onset = entry.get('onset_bucket') or 'unknown'
         add('family_history.' + cond, 'hereditary', hereditary_score(entry),
             label='Family history: ' + cond,
-            explanation='{0}; onset {1}'.format(detail, onset))
+            explanation='{0}, {1}'.format(detail, ONSET_TEXT.get(onset, onset)).capitalize())
 
     return components, factors
 

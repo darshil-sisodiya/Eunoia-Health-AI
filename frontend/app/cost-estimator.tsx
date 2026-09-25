@@ -1,12 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Animated,
   Easing,
+  Pressable,
   StyleSheet,
   Text,
-  TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,7 +12,8 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import KeyboardAwareScreenScrollView from '../components/KeyboardAwareScreenScrollView';
-import { colors, shadows, spacing, typography } from '../constants/theme';
+import { Button, Notice, ScreenHeader, TextField, tap } from '../components/ui';
+import { colors, fonts, spacing, typography } from '../constants/theme';
 import { useAuth } from '../contexts/AuthContext';
 import { useHealthProfile } from '../contexts/HealthProfileContext';
 import {
@@ -45,7 +44,7 @@ const TIER_OPTIONS: Array<{
   label: string;
   hint: string;
 }> = [
-  { key: 'Low', label: 'Low', hint: 'Government / trust' },
+  { key: 'Low', label: 'Low', hint: 'Government or trust' },
   { key: 'Medium', label: 'Medium', hint: 'Mid-tier private' },
   { key: 'High', label: 'High', hint: 'Premium private' },
 ];
@@ -57,17 +56,17 @@ const CONSULTATION_OPTIONS: Array<{
   { key: 'General', label: 'General' },
   { key: 'Specialist', label: 'Specialist' },
   { key: 'Follow_up', label: 'Follow-up' },
-  { key: 'Tele', label: 'Tele' },
+  { key: 'Tele', label: 'Teleconsult' },
 ];
 
 // ── Hospital tier colour mapping (uses existing tokens only) ─────────────
 
 function tierTone(level: string) {
   const v = (level || '').toLowerCase();
-  if (v === 'high') return { bg: colors.accentMuted, fg: colors.accent, border: colors.accentSoftBorder };
-  if (v === 'low') return { bg: colors.successSoft, fg: colors.success, border: colors.successSoft };
+  if (v === 'high') return { bg: colors.accentSoft, fg: colors.accentText };
+  if (v === 'low') return { bg: colors.successSoft, fg: colors.success };
   // "medium" and Bangalore's "mid" share the neutral tone.
-  return { bg: colors.backgroundTertiary, fg: colors.textPrimary, border: colors.surfaceBorder };
+  return { bg: colors.selected, fg: colors.textPrimary };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -107,6 +106,10 @@ export default function CostEstimatorScreen() {
 
   // Result fade-in.
   const resultOpacity = useRef(new Animated.Value(0)).current;
+  // Bring the result into view once it renders; it lands below the form.
+  const scrollRef = useRef<any>(null);
+  const bodyY = useRef(0);
+  const scrolledFor = useRef<unknown>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -171,7 +174,8 @@ export default function CostEstimatorScreen() {
   }, [estimate, resultOpacity]);
 
   const conditionTrimmed = conditionText.trim();
-  const canSubmit = conditionTrimmed.length > 0 && city.trim().length > 0 && !estimating;
+  const formReady = conditionTrimmed.length > 0 && city.trim().length > 0;
+  const canSubmit = formReady && !estimating;
 
   const handleEstimate = useCallback(async () => {
     if (!canSubmit || !token) return;
@@ -206,131 +210,125 @@ export default function CostEstimatorScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <Header onBack={handleBack} />
       <KeyboardAwareScreenScrollView
+        innerRef={(r: any) => {
+          scrollRef.current = r;
+        }}
         style={styles.keyboardScroll}
         contentContainerStyle={styles.scrollContent}
       >
-          {/* ── HERO ─────────────────────────────────────── */}
-          <View style={styles.hero}>
-            <View style={styles.heroAccentGlow} pointerEvents="none" />
-            <Text style={styles.heroEyebrow}>EUNOIA · COST ESTIMATOR</Text>
-            <Text style={styles.heroTitle}>Plan ahead with calm clarity.</Text>
-            <Text style={styles.heroBody}>
-              Approximate healthcare cost ranges for your city, hospital tier, and
-              condition. Built deterministically from real Karnataka hospital data.
-            </Text>
-          </View>
+        <ScreenHeader
+          title="Treatment costs"
+          subtitle="Typical price ranges for care in your city, from Karnataka hospital data."
+          onBack={handleBack}
+        />
 
-          {/* ── CITY ─────────────────────────────────────── */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionHeaderLeft}>
-                <Text style={styles.sectionEyebrow}>01</Text>
-                <Text style={styles.sectionTitle}>Your city</Text>
-              </View>
-            </View>
-            <View style={styles.cityCard}>
-              {profileLoading ? (
-                <View style={styles.skeletonRow}>
-                  <View style={[styles.skeletonLine, { width: 120 }]} />
+        <View style={styles.body} onLayout={(e) => (bodyY.current = e.nativeEvent.layout.y)}>
+          {/* ── City ─────────────────────────────────────── */}
+          <View style={styles.step}>
+            {profileLoading ? (
+              <>
+                <Text style={styles.stepLabel}>Your city</Text>
+                <View style={styles.card}>
+                  <View style={[styles.skeletonLine, { width: 140 }]} />
                 </View>
-              ) : cityEditing ? (
-                <TextInput
-                  value={city}
-                  onChangeText={setCity}
-                  placeholder="City (e.g. Bengaluru)"
-                  placeholderTextColor={colors.textMuted}
-                  style={styles.cityInput}
-                  autoCapitalize="words"
-                  autoCorrect={false}
-                  onBlur={() => setCityEditing(false)}
-                  returnKeyType="done"
-                  onSubmitEditing={() => setCityEditing(false)}
-                  autoFocus
-                />
-              ) : (
-                <View style={styles.cityRow}>
-                  <View style={styles.cityIconBg}>
-                    <Ionicons name="location-outline" size={16} color={colors.textPrimary} />
+              </>
+            ) : cityEditing ? (
+              <TextField
+                label="Your city"
+                icon="location-outline"
+                value={city}
+                onChangeText={setCity}
+                placeholder="e.g. Bengaluru"
+                autoCapitalize="words"
+                autoCorrect={false}
+                onBlur={() => setCityEditing(false)}
+                returnKeyType="done"
+                onSubmitEditing={() => setCityEditing(false)}
+                autoFocus
+              />
+            ) : (
+              <>
+                <Text style={styles.stepLabel}>Your city</Text>
+                <View style={[styles.card, styles.cityRow]}>
+                  <View style={styles.iconCircle}>
+                    <Ionicons name="location-outline" size={20} color={colors.textPrimary} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.cityValue}>{city || 'Not set'}</Text>
+                    <Text style={[styles.cityValue, !city && styles.cityValueEmpty]}>
+                      {city || 'No city set'}
+                    </Text>
                     <Text style={styles.cityHint}>
                       {me?.preferred_city
-                        ? 'Auto-filled from your onboarding'
-                        : 'Enter the city you want estimates for'}
+                        ? 'From your profile'
+                        : 'Add the city you want estimates for'}
                     </Text>
                   </View>
-                  <TouchableOpacity
-                    style={styles.cityEditBtn}
-                    onPress={() => setCityEditing(true)}
-                    activeOpacity={0.85}
+                  <Pressable
+                    style={({ pressed }) => [styles.cityEditBtn, pressed && styles.pressed]}
+                    onPress={() => {
+                      tap();
+                      setCityEditing(true);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={city ? 'Change city' : 'Add city'}
                   >
-                    <Ionicons name="pencil-outline" size={14} color={colors.textPrimary} />
-                    <Text style={styles.cityEditText}>Change</Text>
-                  </TouchableOpacity>
+                    <Text style={styles.cityEditText}>{city ? 'Change' : 'Add'}</Text>
+                  </Pressable>
                 </View>
-              )}
-            </View>
+              </>
+            )}
           </View>
 
-          {/* ── CONDITION TEXT ───────────────────────────── */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionHeaderLeft}>
-                <Text style={styles.sectionEyebrow}>02</Text>
-                <Text style={styles.sectionTitle}>What&apos;s the condition?</Text>
-              </View>
-            </View>
-            <View style={styles.conditionCard}>
-              <TextInput
-                value={conditionText}
-                onChangeText={setConditionText}
-                placeholder="e.g. chest pain, diabetes, knee fracture, dental cleaning"
-                placeholderTextColor={colors.textMuted}
-                style={styles.conditionInput}
-                multiline
-                numberOfLines={2}
-                maxLength={200}
-                autoCorrect
-                returnKeyType="default"
-                accessibilityLabel="Condition description"
-              />
-              {profileConditions.length > 0 ? (
-                <View style={styles.profileConditionRow}>
-                  <Text style={styles.profileConditionLabel}>From your profile</Text>
-                  <View style={styles.profileConditionChips}>
-                    {profileConditions.map((name) => (
-                      <TouchableOpacity
+          {/* ── Condition ────────────────────────────────── */}
+          <View style={styles.step}>
+            <TextField
+              label="Symptom or condition"
+              value={conditionText}
+              onChangeText={setConditionText}
+              placeholder="e.g. chest pain, diabetes, knee fracture"
+              multiline
+              numberOfLines={2}
+              maxLength={200}
+              autoCorrect
+              style={styles.conditionInput}
+              hint="We match it to the right kind of specialist."
+            />
+            {profileConditions.length > 0 ? (
+              <View style={styles.profileConditions}>
+                <Text style={styles.profileConditionLabel}>From your profile</Text>
+                <View style={styles.chipWrap}>
+                  {profileConditions.map((name) => {
+                    const selected = conditionTrimmed === name;
+                    return (
+                      <Pressable
                         key={name}
-                        style={styles.profileConditionChip}
-                        onPress={() => setConditionText(name)}
+                        style={({ pressed }) => [
+                          styles.pill,
+                          selected && styles.selectedFill,
+                          pressed && styles.pressed,
+                        ]}
+                        onPress={() => {
+                          tap();
+                          setConditionText(name);
+                        }}
                         accessibilityRole="button"
-                        accessibilityLabel={`Estimate for ${name}`}
+                        accessibilityLabel={`Use ${name}`}
+                        accessibilityState={{ selected }}
                       >
-                        <Text style={styles.profileConditionChipText}>{name}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
+                        <Text style={[styles.pillText, selected && styles.selectedText]}>{name}</Text>
+                      </Pressable>
+                    );
+                  })}
                 </View>
-              ) : null}
-              <Text style={styles.conditionHint}>
-                Type any health concern. We map it to a relevant specialization.
-              </Text>
-            </View>
+              </View>
+            ) : null}
           </View>
 
-          {/* ── SEVERITY ─────────────────────────────────── */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionHeaderLeft}>
-                <Text style={styles.sectionEyebrow}>03</Text>
-                <Text style={styles.sectionTitle}>Severity</Text>
-              </View>
-              <Text style={styles.sectionMeta}>Optional</Text>
-            </View>
-            <View style={styles.chipRow}>
+          {/* ── Severity ─────────────────────────────────── */}
+          <View style={styles.step}>
+            <Text style={styles.stepLabel}>How severe is it?</Text>
+            <View style={styles.chipRow} accessibilityRole="radiogroup">
               {SEVERITY_OPTIONS.map((opt) => (
                 <SelectorChip
                   key={opt.key}
@@ -343,21 +341,16 @@ export default function CostEstimatorScreen() {
             </View>
           </View>
 
-          {/* ── HOSPITAL TIER ────────────────────────────── */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionHeaderLeft}>
-                <Text style={styles.sectionEyebrow}>04</Text>
-                <Text style={styles.sectionTitle}>Hospital tier</Text>
-              </View>
-              <Text style={styles.sectionMeta}>{tier ? '' : 'Optional'}</Text>
-            </View>
-            <View style={styles.chipRow}>
+          {/* ── Hospital tier ────────────────────────────── */}
+          <View style={styles.step}>
+            <Text style={styles.stepLabel}>Hospital tier</Text>
+            <View style={styles.chipRow} accessibilityRole="radiogroup">
               <SelectorChip
                 label="Auto"
-                hint="Based on city"
+                hint="Compare all tiers"
                 active={tier === null}
                 onPress={() => setTier(null)}
+                half
               />
               {TIER_OPTIONS.map((opt) => (
                 <SelectorChip
@@ -366,61 +359,46 @@ export default function CostEstimatorScreen() {
                   hint={opt.hint}
                   active={tier === opt.key}
                   onPress={() => setTier(opt.key)}
+                  half
                 />
               ))}
             </View>
           </View>
 
-          {/* ── CONSULTATION TYPE ────────────────────────── */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionHeaderLeft}>
-                <Text style={styles.sectionEyebrow}>05</Text>
-                <Text style={styles.sectionTitle}>Consultation type</Text>
-              </View>
-              <Text style={styles.sectionMeta}>Optional</Text>
-            </View>
-            <View style={styles.chipRow}>
+          {/* ── Consultation type ────────────────────────── */}
+          <View style={styles.step}>
+            <Text style={styles.stepLabel}>Consultation type</Text>
+            <View style={styles.chipRow} accessibilityRole="radiogroup">
               {CONSULTATION_OPTIONS.map((opt) => (
                 <SelectorChip
                   key={opt.key}
                   label={opt.label}
                   active={consultation === opt.key}
                   onPress={() => setConsultation(opt.key)}
+                  half
                 />
               ))}
             </View>
           </View>
 
-          {/* ── PRIMARY ACTION ───────────────────────────── */}
-          <View style={styles.ctaBlock}>
-            <TouchableOpacity
-              style={[styles.primaryCta, !canSubmit && styles.primaryCtaDisabled]}
-              activeOpacity={0.9}
+          {/* ── Primary action ───────────────────────────── */}
+          <View style={styles.cta}>
+            <Button
+              label="Estimate cost"
               onPress={handleEstimate}
-              disabled={!canSubmit}
-              accessibilityRole="button"
-              accessibilityLabel="Generate cost estimate"
-            >
-              {estimating ? (
-                <ActivityIndicator size="small" color={colors.textInverse} />
-              ) : (
-                <>
-                  <Text style={styles.primaryCtaText}>Generate estimate</Text>
-                  <Ionicons name="arrow-forward" size={16} color={colors.textInverse} />
-                </>
-              )}
-            </TouchableOpacity>
-            {!canSubmit && !estimating && (
+              loading={estimating}
+              disabled={!formReady}
+            />
+            {!formReady && !estimating ? (
               <Text style={styles.helperText}>
                 {conditionTrimmed.length === 0
-                  ? 'Describe the condition to continue.'
+                  ? 'Describe the symptom or condition to continue.'
                   : 'Add a city to continue.'}
               </Text>
-            )}
+            ) : null}
           </View>
 
-          {/* ── ESTIMATE / SKELETON / ERROR ──────────────── */}
+          {/* ── Estimate / skeleton / error ──────────────── */}
           {estimating && <EstimatingSkeleton />}
 
           {!estimating && estimateError && (
@@ -428,34 +406,24 @@ export default function CostEstimatorScreen() {
           )}
 
           {!estimating && estimate && (
-            <Animated.View style={{ opacity: resultOpacity }}>
+            <Animated.View
+              style={{ opacity: resultOpacity }}
+              onLayout={(e) => {
+                // Once per estimate, so later relayouts don't yank the scroll.
+                if (scrolledFor.current === estimate) return;
+                scrolledFor.current = estimate;
+                scrollRef.current?.scrollTo?.({
+                  y: Math.max(bodyY.current + e.nativeEvent.layout.y - spacing.lg, 0),
+                  animated: true,
+                });
+              }}
+            >
               <EstimateResult estimate={estimate} onReset={handleReset} />
             </Animated.View>
           )}
-
-          <View style={{ height: 80 }} />
+        </View>
       </KeyboardAwareScreenScrollView>
     </SafeAreaView>
-  );
-}
-
-// ── Header ───────────────────────────────────────────────────────────────
-
-function Header({ onBack }: { onBack: () => void }) {
-  return (
-    <View style={styles.header}>
-      <TouchableOpacity
-        style={styles.headerBtn}
-        onPress={onBack}
-        activeOpacity={0.85}
-        accessibilityRole="button"
-        accessibilityLabel="Back"
-      >
-        <Ionicons name="chevron-back" size={20} color={colors.textPrimary} />
-      </TouchableOpacity>
-      <Text style={styles.headerTitle}>Cost Estimator</Text>
-      <View style={styles.headerSpacer} />
-    </View>
   );
 }
 
@@ -466,25 +434,35 @@ function SelectorChip({
   hint,
   active,
   onPress,
+  half = false,
 }: {
   label: string;
   hint?: string;
   active: boolean;
   onPress: () => void;
+  half?: boolean;
 }) {
   return (
-    <TouchableOpacity
-      style={[styles.chip, active && styles.chipActive]}
-      onPress={onPress}
-      activeOpacity={0.85}
-      accessibilityRole="button"
+    <Pressable
+      style={({ pressed }) => [
+        styles.chip,
+        half && styles.chipHalf,
+        active && styles.selectedFill,
+        pressed && styles.pressed,
+      ]}
+      onPress={() => {
+        tap();
+        onPress();
+      }}
+      accessibilityRole="radio"
+      accessibilityLabel={hint ? `${label}, ${hint}` : label}
       accessibilityState={{ selected: active }}
     >
-      <Text style={[styles.chipLabel, active && styles.chipLabelActive]}>{label}</Text>
+      <Text style={[styles.chipLabel, active && styles.selectedText]}>{label}</Text>
       {hint ? (
         <Text style={[styles.chipHint, active && styles.chipHintActive]}>{hint}</Text>
       ) : null}
-    </TouchableOpacity>
+    </Pressable>
   );
 }
 
@@ -492,17 +470,17 @@ function SelectorChip({
 
 function EstimatingSkeleton() {
   return (
-    <View style={styles.section}>
+    <View style={styles.result} accessible accessibilityLabel="Working out your estimate">
       <View style={styles.totalCard}>
-        <View style={[styles.skeletonLine, { width: 80, marginBottom: spacing.md }]} />
-        <View style={[styles.skeletonLine, { width: 220, height: 36, marginBottom: spacing.sm }]} />
-        <View style={[styles.skeletonLine, { width: 160, height: 14 }]} />
+        <View style={[styles.skeletonLineInverse, { width: 140 }]} />
+        <View style={[styles.skeletonLineInverse, { width: 240, height: 34, marginTop: spacing.lg }]} />
+        <View style={[styles.skeletonLineInverse, { width: 180, marginTop: spacing.lg }]} />
       </View>
-      <View style={styles.breakdownGrid}>
-        {[0, 1, 2, 3].map((i) => (
-          <View key={i} style={styles.breakdownCard}>
-            <View style={[styles.skeletonLine, { width: 60 }]} />
-            <View style={[styles.skeletonLine, { width: 100, marginTop: spacing.sm, height: 18 }]} />
+      <View style={styles.card}>
+        {[0, 1, 2].map((i) => (
+          <View key={i} style={styles.skeletonRow}>
+            <View style={[styles.skeletonLine, { width: 110 }]} />
+            <View style={[styles.skeletonLine, { width: 90 }]} />
           </View>
         ))}
       </View>
@@ -514,17 +492,9 @@ function EstimatingSkeleton() {
 
 function ErrorBlock({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
-    <View style={styles.errorCard}>
-      <View style={styles.errorIconBg}>
-        <Ionicons name="alert-circle-outline" size={18} color={colors.error} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.errorTitle}>Couldn&apos;t generate the estimate</Text>
-        <Text style={styles.errorBody}>{message}</Text>
-      </View>
-      <TouchableOpacity style={styles.retryBtn} onPress={onRetry} activeOpacity={0.85}>
-        <Text style={styles.retryBtnText}>Retry</Text>
-      </TouchableOpacity>
+    <View style={styles.errorBlock}>
+      <Notice>{`Couldn't get an estimate. ${message}`}</Notice>
+      <Button label="Try again" variant="secondary" compact onPress={onRetry} style={styles.retryBtn} />
     </View>
   );
 }
@@ -556,7 +526,7 @@ function EstimateResult({
     if (breakdown.hospitalization) {
       items.push({
         key: 'hospitalization',
-        label: 'Hospitalization',
+        label: 'Hospital stay',
         min: breakdown.hospitalization.min,
         max: breakdown.hospitalization.max,
         icon: 'bed-outline',
@@ -566,156 +536,144 @@ function EstimateResult({
   }, [breakdown]);
 
   const tierEntries = useMemo(() => {
-    const order: Array<'Low' | 'Medium' | 'High'> = ['Low', 'Medium', 'High'];
-    return order
-      .filter((t) => estimate.tier_breakdown && estimate.tier_breakdown[t])
-      .map((t) => ({ tier: t, band: estimate.tier_breakdown[t] }));
+    const tb = estimate.tier_breakdown ?? {};
+    // The Bangalore estimator keys the middle tier "Mid"; the generic one "Medium".
+    const bands = { Low: tb.Low, Medium: tb.Medium ?? tb.Mid, High: tb.High };
+    return (['Low', 'Medium', 'High'] as const)
+      .filter((t) => bands[t])
+      .map((t) => ({ tier: t, band: bands[t] }));
   }, [estimate.tier_breakdown]);
 
   const isAuto = estimate.tier === 'Auto';
+  const sameTotal = estimate.estimated_total_min === estimate.estimated_total_max;
+
+  const metaPills = [
+    estimate.city,
+    isAuto ? 'All tiers' : `${estimate.tier} tier`,
+    capitalize(estimate.severity),
+    estimate.bangalore_mode ? estimate.mapped_specialization : null,
+  ].filter(Boolean) as string[];
 
   return (
-    <View>
+    <View style={styles.result}>
       {/* Total */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <View style={styles.sectionHeaderLeft}>
-            <Text style={styles.sectionEyebrow}>06</Text>
-            <Text style={styles.sectionTitle}>Estimated total</Text>
-          </View>
-          <TouchableOpacity onPress={onReset} activeOpacity={0.85} style={styles.smallGhostBtn}>
-            <Ionicons name="refresh-outline" size={12} color={colors.textPrimary} />
-            <Text style={styles.smallGhostBtnText}>Reset</Text>
-          </TouchableOpacity>
-        </View>
+      <View style={styles.resultHead}>
+        <Text style={styles.sectionTitle} accessibilityRole="header">
+          Your estimate
+        </Text>
+        <Button
+          label="Clear"
+          variant="ghost"
+          compact
+          icon="refresh-outline"
+          onPress={onReset}
+          accessibilityLabel="Clear estimate"
+          style={styles.clearBtn}
+        />
+      </View>
 
-        <View style={styles.totalCard}>
-          <View style={styles.heroAccentGlow} pointerEvents="none" />
-          <View style={styles.totalCardTopRow}>
-            <Text style={styles.totalEyebrow}>RANGE FOR {estimate.condition.label.toUpperCase()}</Text>
-            <View style={styles.totalBadgeRow}>
-              {estimate.bangalore_mode && (
-                <View style={styles.localBadge}>
-                  <Ionicons name="location" size={9} color={colors.textInverse} />
-                  <Text style={styles.localBadgeText}>BENGALURU</Text>
-                </View>
-              )}
-              {estimate.refinement_applied && (
-                <View style={styles.refinedBadge}>
-                  <View style={styles.refinedBadgeDot} />
-                  <Text style={styles.refinedBadgeText}>AI-ASSISTED</Text>
-                </View>
-              )}
-            </View>
-          </View>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalValue}>{formatINR(estimate.estimated_total_min)}</Text>
-            <Text style={styles.totalSeparator}>—</Text>
-            <Text style={styles.totalValue}>{formatINR(estimate.estimated_total_max)}</Text>
-          </View>
-          <View style={styles.totalMetaRow}>
-            <View style={styles.metaPill}>
-              <Text style={styles.metaPillText}>{estimate.city}</Text>
-            </View>
-            <View style={styles.metaDot} />
-            <View style={styles.metaPill}>
-              <Text style={styles.metaPillText}>{estimate.tier} tier</Text>
-            </View>
-            <View style={styles.metaDot} />
-            <View style={styles.metaPill}>
-              <Text style={styles.metaPillText}>{capitalize(estimate.severity)}</Text>
-            </View>
-            {estimate.bangalore_mode && estimate.mapped_specialization ? (
-              <>
-                <View style={styles.metaDot} />
-                <View style={styles.metaPill}>
-                  <Text style={styles.metaPillText}>{estimate.mapped_specialization}</Text>
-                </View>
-              </>
+      <View style={styles.totalCard}>
+        <Text style={styles.totalCondition}>{estimate.condition.label}</Text>
+        {estimate.bangalore_mode || estimate.refinement_applied ? (
+          <View style={styles.totalBadgeRow}>
+            {estimate.bangalore_mode ? (
+              <View style={styles.inversePill}>
+                <Ionicons name="location" size={12} color={colors.textInverse} />
+                <Text style={styles.inversePillText}>Bengaluru data</Text>
+              </View>
+            ) : null}
+            {estimate.refinement_applied ? (
+              <View style={styles.inversePill}>
+                <View style={styles.accentDot} />
+                <Text style={styles.inversePillText}>AI-assisted</Text>
+              </View>
             ) : null}
           </View>
-          {estimate.refinement_applied && (
-            <View style={styles.baselineCompareRow}>
-              <Text style={styles.baselineCompareLabel}>Deterministic baseline</Text>
-              <Text style={styles.baselineCompareValue}>
-                {formatINR(estimate.baseline_total_min)} – {formatINR(estimate.baseline_total_max)}
-              </Text>
-            </View>
+        ) : null}
+
+        <View
+          style={styles.totalRow}
+          accessible
+          accessibilityLabel={
+            sameTotal
+              ? `Estimated total ${formatINR(estimate.estimated_total_min)}`
+              : `Estimated total ${formatINR(estimate.estimated_total_min)} to ${formatINR(estimate.estimated_total_max)}`
+          }
+        >
+          <Text style={styles.totalValue}>{formatINR(estimate.estimated_total_min)}</Text>
+          {sameTotal ? null : (
+            <>
+              <Text style={styles.totalSeparator}>–</Text>
+              <Text style={styles.totalValue}>{formatINR(estimate.estimated_total_max)}</Text>
+            </>
           )}
-          <Text style={styles.totalNote}>{estimate.confidence_note}</Text>
         </View>
+        <Text style={styles.totalCaption}>Estimated total cost</Text>
+
+        <View style={styles.totalMetaRow}>
+          {metaPills.map((m) => (
+            <View key={m} style={styles.inversePill}>
+              <Text style={styles.inversePillText}>{m}</Text>
+            </View>
+          ))}
+        </View>
+
+        {estimate.refinement_applied && (
+          <View style={styles.baselineRow}>
+            <Text style={styles.baselineLabel}>Baseline estimate</Text>
+            <Text style={styles.baselineValue}>
+              {formatINR(estimate.baseline_total_min)} – {formatINR(estimate.baseline_total_max)}
+            </Text>
+          </View>
+        )}
+        <Text style={styles.totalNote}>{estimate.confidence_note}</Text>
       </View>
 
       {/* Per-tier ranges (Auto only) */}
       {isAuto && tierEntries.length > 0 && (
         <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionHeaderLeft}>
-              <Text style={styles.sectionEyebrow}>07</Text>
-              <Text style={styles.sectionTitle}>By hospital tier</Text>
-            </View>
-          </View>
-          <View style={styles.tierStack}>
-            {tierEntries.map(({ tier, band }) => {
-              const tone = tierTone(tier);
-              return (
-                <View key={tier} style={styles.tierRow}>
-                  <View
-                    style={[
-                      styles.tierBadge,
-                      { backgroundColor: tone.bg, borderColor: tone.border },
-                    ]}
-                  >
-                    <Text style={[styles.tierBadgeText, { color: tone.fg }]}>{tier.toUpperCase()}</Text>
-                  </View>
-                  <Text style={styles.tierRangeText}>
-                    {formatINR(band.min)} <Text style={styles.tierRangeSep}>–</Text>{' '}
-                    {formatINR(band.max)}
+          <Text style={styles.sectionTitle}>By hospital tier</Text>
+          <View style={[styles.card, styles.rowList]}>
+            {tierEntries.map(({ tier, band }) => (
+              <View key={tier} style={styles.amountRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.amountLabel}>{tier}</Text>
+                  <Text style={styles.amountHint}>
+                    {TIER_OPTIONS.find((o) => o.key === tier)?.hint}
                   </Text>
                 </View>
-              );
-            })}
+                <Text style={styles.amountValue}>{formatRange(band)}</Text>
+              </View>
+            ))}
           </View>
         </View>
       )}
 
       {/* Breakdown */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <View style={styles.sectionHeaderLeft}>
-            <Text style={styles.sectionEyebrow}>{isAuto && tierEntries.length > 0 ? '08' : '07'}</Text>
-            <Text style={styles.sectionTitle}>Breakdown</Text>
+      {breakdownItems.length > 0 ? (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Breakdown</Text>
+          <View style={[styles.card, styles.rowList]}>
+            {breakdownItems.map((item) => (
+              <View key={item.key} style={styles.amountRow}>
+                <View style={styles.iconCircleSmall}>
+                  <Ionicons name={item.icon} size={18} color={colors.textPrimary} />
+                </View>
+                <Text style={[styles.amountLabel, { flex: 1 }]}>{item.label}</Text>
+                <Text style={styles.amountValue}>
+                  {formatRange({ min: item.min, max: item.max })}
+                </Text>
+              </View>
+            ))}
           </View>
         </View>
-        <View style={styles.breakdownGrid}>
-          {breakdownItems.map((item) => (
-            <View key={item.key} style={styles.breakdownCard}>
-              <View style={styles.breakdownIconBg}>
-                <Ionicons name={item.icon} size={14} color={colors.textPrimary} />
-              </View>
-              <Text style={styles.breakdownLabel}>{item.label}</Text>
-              <Text style={styles.breakdownValue}>
-                {formatRange({ min: item.min, max: item.max })}
-              </Text>
-            </View>
-          ))}
-        </View>
-      </View>
+      ) : null}
 
-      {/* Healthcare planning context (AI-assisted reasoning bullets) */}
+      {/* Planning context (AI-assisted reasoning bullets) */}
       {estimate.refinement_applied && estimate.refinement_reasoning.length > 0 && (
         <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionHeaderLeft}>
-              <Text style={styles.sectionEyebrow}>{isAuto && tierEntries.length > 0 ? '09' : '08'}</Text>
-              <Text style={styles.sectionTitle}>Healthcare planning context</Text>
-            </View>
-            <View style={styles.aiBadge}>
-              <View style={styles.aiBadgeDot} />
-              <Text style={styles.aiBadgeText}>AI</Text>
-            </View>
-          </View>
-          <View style={styles.aiCard}>
+          <Text style={styles.sectionTitle}>What shaped this estimate</Text>
+          <View style={styles.card}>
             {estimate.refinement_reasoning.map((bullet, idx) => (
               <View key={idx} style={styles.reasoningRow}>
                 <View style={styles.reasoningBullet} />
@@ -728,34 +686,25 @@ function EstimateResult({
 
       {/* Hospitals */}
       <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <View style={styles.sectionHeaderLeft}>
-            <Text style={styles.sectionEyebrow}>
-              {(() => {
-                let n = isAuto && tierEntries.length > 0 ? 9 : 8;
-                if (estimate.refinement_applied && estimate.refinement_reasoning.length > 0) {
-                  n += 1;
-                }
-                return String(n).padStart(2, '0');
-              })()}
-            </Text>
-            <Text style={styles.sectionTitle}>
-              {estimate.bangalore_mode ? 'Hospitals & doctors' : 'Relevant hospitals'}
-            </Text>
-          </View>
-          <Text style={styles.sectionMeta}>{estimate.matched_hospitals.length}</Text>
+        <View style={styles.sectionHeadRow}>
+          <Text style={[styles.sectionTitle, { flex: 1 }]}>
+            {estimate.bangalore_mode ? 'Hospitals and doctors' : 'Relevant hospitals'}
+          </Text>
+          {estimate.matched_hospitals.length > 0 ? (
+            <Text style={styles.sectionMeta}>{estimate.matched_hospitals.length} found</Text>
+          ) : null}
         </View>
         {estimate.matched_hospitals.length === 0 ? (
-          <View style={styles.emptyHospitalsCard}>
-            <Text style={styles.emptyHospitalsText}>
-              No hospitals indexed for this combination yet. The estimate uses
-              the {estimate.tier.toLowerCase()}-tier base pricing band.
+          <View style={styles.card}>
+            <Text style={styles.emptyText}>
+              No hospitals are listed for this combination yet. The estimate uses
+              the {estimate.tier.toLowerCase()}-tier base pricing.
             </Text>
           </View>
         ) : (
           <View style={styles.hospitalsList}>
             {estimate.matched_hospitals.map((h) => (
-              <HospitalRow
+              <HospitalCard
                 key={h.name}
                 hospital={h}
                 bangalore={!!estimate.bangalore_mode}
@@ -763,22 +712,24 @@ function EstimateResult({
             ))}
           </View>
         )}
-        <Text style={styles.relevanceSummary}>{estimate.relevance_summary}</Text>
+        {estimate.relevance_summary ? (
+          <Text style={styles.relevanceSummary}>{estimate.relevance_summary}</Text>
+        ) : null}
       </View>
 
       {/* Footer disclaimer */}
-      <View style={styles.disclaimerBlock}>
-        <Ionicons name="information-circle-outline" size={14} color={colors.textTertiary} />
+      <View style={styles.disclaimer}>
+        <Ionicons name="information-circle-outline" size={16} color={colors.textTertiary} />
         <Text style={styles.disclaimerText}>
-          Estimates are approximate and intended for planning. Confirm with hospitals
-          before any treatment.
+          Estimates are approximate and meant for planning. Confirm prices with the
+          hospital before any treatment.
         </Text>
       </View>
     </View>
   );
 }
 
-function HospitalRow({
+function HospitalCard({
   hospital,
   bangalore,
 }: {
@@ -797,111 +748,122 @@ function HospitalRow({
   const hasCostRange =
     hospital.estimated_cost_min != null && hospital.estimated_cost_max != null;
 
+  const subtitle = [
+    hospital.specialization,
+    hospital.hospital_type,
+    isBangalore ? hospital.area : null,
+  ]
+    .filter(Boolean)
+    .join(', ');
+
   return (
-    <View style={isBangalore ? styles.hospitalCard : styles.hospitalRow}>
-      <View style={styles.hospitalLeft}>
-        <View style={styles.hospitalTitleRow}>
-          <Text style={styles.hospitalName} numberOfLines={2}>
-            {hospital.name}
-          </Text>
-          <View
-            style={[
-              styles.hospitalTierPill,
-              { backgroundColor: tone.bg, borderColor: tone.border },
-            ]}
-          >
-            <Text style={[styles.hospitalTierText, { color: tone.fg }]}>
-              {tierLabel.toUpperCase()}
-            </Text>
-          </View>
-        </View>
-
-        <Text style={styles.hospitalSubtle} numberOfLines={1}>
-          {hospital.specialization} · {hospital.hospital_type}
-          {isBangalore && hospital.area ? ` · ${hospital.area}` : ''}
+    <View style={styles.card}>
+      <View style={styles.hospitalTitleRow}>
+        <Text style={styles.hospitalName} numberOfLines={2}>
+          {hospital.name}
         </Text>
-
-        <View style={styles.hospitalMetaRow}>
-          <View style={styles.hospitalMetaItem}>
-            <Ionicons name="star" size={10} color={colors.textPrimary} />
-            <Text style={styles.hospitalMetaText}>{stars}</Text>
-          </View>
-          {isBangalore && hospital.accreditation ? (
-            <>
-              <View style={styles.hospitalMetaDivider} />
-              <Text style={styles.hospitalRelevance}>{hospital.accreditation}</Text>
-            </>
-          ) : null}
-          <View style={styles.hospitalMetaDivider} />
-          <Text style={styles.hospitalRelevance}>{relevancePct}% match</Text>
-        </View>
-
-        {/* Bangalore-only: consultation fee + estimated cost range */}
-        {isBangalore && (hasFee || hasCostRange) ? (
-          <View style={styles.hospitalStatsRow}>
-            {hasFee ? (
-              <View style={styles.hospitalStat}>
-                <Text style={styles.hospitalStatLabel}>CONSULTATION</Text>
-                <Text style={styles.hospitalStatValue}>
-                  {hospital.consultation_fee_min === hospital.consultation_fee_max
-                    ? formatINR(hospital.consultation_fee_min as number)
-                    : `${formatINR(hospital.consultation_fee_min as number)} – ${formatINR(
-                        hospital.consultation_fee_max as number,
-                      )}`}
-                </Text>
-              </View>
-            ) : null}
-            {hasCostRange ? (
-              <View style={styles.hospitalStat}>
-                <Text style={styles.hospitalStatLabel}>EST. TREATMENT</Text>
-                <Text style={styles.hospitalStatValue}>
-                  {`${formatINR(hospital.estimated_cost_min as number)} – ${formatINR(
-                    hospital.estimated_cost_max as number,
-                  )}`}
-                </Text>
-              </View>
-            ) : null}
-          </View>
-        ) : null}
-
-        {/* Bangalore-only: recommended doctors */}
-        {isBangalore && doctors.length > 0 ? (
-          <View style={styles.doctorList}>
-            <Text style={styles.doctorListLabel}>Recommended doctors</Text>
-            {doctors.map((doc, idx) => (
-              <DoctorRow key={`${doc.name}-${idx}`} doctor={doc} />
-            ))}
+        {tierLabel ? (
+          <View style={[styles.tierChip, { backgroundColor: tone.bg }]}>
+            <Text style={[styles.tierChipText, { color: tone.fg }]}>
+              {capitalize(tierLabel.toLowerCase())} tier
+            </Text>
           </View>
         ) : null}
       </View>
+
+      {subtitle ? (
+        <Text style={styles.hospitalSubtle} numberOfLines={2}>
+          {subtitle}
+        </Text>
+      ) : null}
+
+      <View style={styles.hospitalMetaRow}>
+        <View style={styles.hospitalMetaItem} accessible accessibilityLabel={`Rated ${stars}`}>
+          <Ionicons name="star" size={14} color={colors.textPrimary} />
+          <Text style={styles.hospitalRating}>{stars}</Text>
+        </View>
+        {/* The directory stores a missing accreditation as the string "None". */}
+        {isBangalore && hospital.accreditation && !/^(none|nan|-)$/i.test(hospital.accreditation.trim()) ? (
+          <Text style={styles.hospitalMetaText}>{hospital.accreditation}</Text>
+        ) : null}
+        <Text style={styles.hospitalMetaText}>{relevancePct}% match</Text>
+      </View>
+
+      {/* Bangalore-only: consultation fee + estimated cost range */}
+      {isBangalore && (hasFee || hasCostRange) ? (
+        <View style={styles.hospitalStatsRow}>
+          {hasFee ? (
+            <View style={styles.hospitalStat}>
+              <Text style={styles.hospitalStatLabel}>Consultation fee</Text>
+              <Text style={styles.hospitalStatValue}>
+                {hospital.consultation_fee_min === hospital.consultation_fee_max
+                  ? formatINR(hospital.consultation_fee_min as number)
+                  : `${formatINR(hospital.consultation_fee_min as number)} – ${formatINR(
+                      hospital.consultation_fee_max as number,
+                    )}`}
+              </Text>
+            </View>
+          ) : null}
+          {hasCostRange ? (
+            <View style={styles.hospitalStat}>
+              <Text style={styles.hospitalStatLabel}>Estimated treatment</Text>
+              <Text style={styles.hospitalStatValue}>
+                {`${formatINR(hospital.estimated_cost_min as number)} – ${formatINR(
+                  hospital.estimated_cost_max as number,
+                )}`}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {/* Bangalore-only: recommended doctors */}
+      {isBangalore && doctors.length > 0 ? (
+        <View style={styles.doctorList}>
+          <Text style={styles.doctorListLabel}>Recommended doctors</Text>
+          {doctors.map((doc, idx) => (
+            <DoctorRow key={`${doc.name}-${idx}`} doctor={doc} />
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
 
 function DoctorRow({ doctor }: { doctor: RecommendedDoctor }) {
+  const meta = [
+    doctor.specialization,
+    doctor.qualification,
+    doctor.experience_years ? `${doctor.experience_years} yrs experience` : null,
+  ]
+    .filter(Boolean)
+    .join(', ');
+  const hours = [doctor.availability, doctor.timing].filter(Boolean).join(', ');
+
   return (
     <View style={styles.doctorRow}>
-      <View style={styles.doctorAvatar}>
-        <Ionicons name="person" size={12} color={colors.textPrimary} />
+      <View style={styles.iconCircleSmall}>
+        <Ionicons name="person-outline" size={18} color={colors.textPrimary} />
       </View>
       <View style={{ flex: 1 }}>
         <Text style={styles.doctorName} numberOfLines={1}>
           {doctor.name}
         </Text>
-        <Text style={styles.doctorMeta} numberOfLines={1}>
-          {doctor.specialization}
-          {doctor.qualification ? ` · ${doctor.qualification}` : ''}
-          {doctor.experience_years ? ` · ${doctor.experience_years} yrs` : ''}
-        </Text>
-        {doctor.availability || doctor.timing ? (
-          <Text style={styles.doctorAvailability} numberOfLines={1}>
-            {[doctor.availability, doctor.timing].filter(Boolean).join(' · ')}
+        {meta ? (
+          <Text style={styles.doctorMeta} numberOfLines={2}>
+            {meta}
+          </Text>
+        ) : null}
+        {hours ? (
+          <Text style={styles.doctorMeta} numberOfLines={1}>
+            {hours}
           </Text>
         ) : null}
       </View>
       {doctor.consultation_fee != null ? (
-        <View style={styles.doctorFeePill}>
-          <Text style={styles.doctorFeeText}>{formatINR(doctor.consultation_fee)}</Text>
+        <View style={styles.doctorFee}>
+          <Text style={styles.doctorFeeValue}>{formatINR(doctor.consultation_fee)}</Text>
+          <Text style={styles.doctorFeeLabel}>per visit</Text>
         </View>
       ) : null}
     </View>
@@ -920,135 +882,78 @@ function capitalize(s: string): string {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.backgroundSecondary,
+    backgroundColor: colors.background,
   },
   keyboardScroll: {
     flex: 1,
-    backgroundColor: colors.backgroundSecondary,
+    backgroundColor: colors.background,
   },
-  // ── Header ──────────────────────────────────────────────────
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.screenPadding,
-    paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-    backgroundColor: colors.backgroundSecondary,
-  },
-  headerBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  headerSpacer: {
-    width: 40,
-    height: 40,
-  },
-  headerTitle: {
-    ...typography.headline,
-    color: colors.textPrimary,
-  },
-
   scrollContent: {
-    backgroundColor: colors.backgroundSecondary,
-    paddingBottom: 80,
+    paddingBottom: spacing.xxxl + spacing.lg,
   },
-
-  // ── Hero ────────────────────────────────────────────────────
-  hero: {
-    marginHorizontal: spacing.screenPadding,
-    marginTop: spacing.xxl,
-    marginBottom: spacing.sm,
-    paddingHorizontal: spacing.xxl,
-    paddingVertical: spacing.xxl,
-    borderRadius: spacing.cardRadiusXl,
-    backgroundColor: colors.inkSurface,
-    borderWidth: 1,
-    borderColor: colors.inkBorderStrong,
-    overflow: 'hidden',
-    position: 'relative',
-    ...shadows.lg,
-  },
-  heroEyebrow: {
-    ...typography.overline,
-    color: colors.textInverseSubtle,
-    marginBottom: spacing.sm,
-  },
-  heroTitle: {
-    ...typography.largeTitle,
-    color: colors.textInverse,
-  },
-  heroBody: {
-    ...typography.body,
-    color: colors.textInverseMuted,
-    marginTop: spacing.md,
-  },
-
-  // ── Section primitives ──────────────────────────────────────
-  section: {
+  body: {
     paddingHorizontal: spacing.screenPadding,
-    marginTop: 32,
+    gap: spacing.xxl,
   },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.md,
-  },
-  sectionHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: spacing.md,
-  },
-  sectionEyebrow: {
-    ...typography.overline,
-    color: colors.accent,
-    fontVariant: ['tabular-nums'],
-  },
-  sectionTitle: {
-    ...typography.title,
-    color: colors.textPrimary,
-  },
-  sectionMeta: {
-    ...typography.caption,
-    color: colors.textTertiary,
+  pressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
   },
 
-  // ── City card ───────────────────────────────────────────────
-  cityCard: {
+  // ── Shared ──────────────────────────────────────────────────
+  card: {
     backgroundColor: colors.surface,
     borderRadius: spacing.cardRadiusLg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.accentSoftBorder,
-    ...shadows.sm,
+    padding: spacing.xl,
   },
+  iconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconCircleSmall: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.selected,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectedFill: {
+    backgroundColor: colors.inkSurface,
+  },
+  selectedText: {
+    color: colors.textInverse,
+  },
+
+  // ── Form steps ──────────────────────────────────────────────
+  step: {
+    gap: spacing.sm,
+  },
+  // Matches TextField's label so every step reads the same.
+  stepLabel: {
+    ...typography.callout,
+    fontFamily: fonts.semibold,
+    color: colors.textPrimary,
+  },
+
+  // City
   cityRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-  },
-  cityIconBg: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: colors.accentMuted,
-    borderWidth: 1,
-    borderColor: colors.accentSoftBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.lg,
   },
   cityValue: {
-    ...typography.bodyMedium,
-    fontWeight: '700',
+    ...typography.headline,
     color: colors.textPrimary,
+  },
+  cityValueEmpty: {
+    color: colors.textTertiary,
   },
   cityHint: {
     ...typography.caption,
@@ -1056,105 +961,74 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   cityEditBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    minHeight: 44,
+    paddingHorizontal: spacing.lg,
     borderRadius: spacing.chipRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    backgroundColor: colors.background,
+    backgroundColor: colors.selected,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   cityEditText: {
-    ...typography.caption,
-    fontWeight: '600',
+    ...typography.callout,
+    fontFamily: fonts.semibold,
     color: colors.textPrimary,
-  },
-  cityInput: {
-    ...typography.bodyMedium,
-    color: colors.textPrimary,
-    paddingVertical: spacing.sm,
   },
 
-  // ── Condition input ─────────────────────────────────────────
-  conditionCard: {
-    backgroundColor: colors.surface,
-    borderRadius: spacing.cardRadiusLg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.accentSoftBorder,
-    ...shadows.sm,
-  },
+  // Condition
   conditionInput: {
-    ...typography.body,
-    color: colors.textPrimary,
-    minHeight: 56,
+    minHeight: 72,
     textAlignVertical: 'top',
-    padding: 0,
   },
-  profileConditionRow: {
-    marginTop: spacing.md,
-    marginBottom: spacing.sm,
+  profileConditions: {
+    marginTop: spacing.sm,
+    gap: spacing.sm,
   },
   profileConditionLabel: {
-    ...typography.overline,
+    ...typography.caption,
     color: colors.textTertiary,
-    marginBottom: spacing.sm,
   },
-  profileConditionChips: {
+  chipWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
-  profileConditionChip: {
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
+  pill: {
+    minHeight: 44,
+    paddingHorizontal: spacing.lg,
     borderRadius: spacing.chipRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    backgroundColor: colors.backgroundSecondary,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  profileConditionChipText: {
-    ...typography.caption,
-    color: colors.textSecondary,
-  },
-
-  conditionHint: {
-    ...typography.caption,
-    color: colors.textTertiary,
-    marginTop: spacing.md,
+  pillText: {
+    ...typography.callout,
+    color: colors.textPrimary,
   },
 
-  // ── Chips ───────────────────────────────────────────────────
+  // Option chips
   chipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
   chip: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: 10,
-    borderRadius: spacing.chipRadius,
+    flex: 1,
+    minHeight: 56,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    borderRadius: spacing.inputRadius,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    minHeight: 44,
-    minWidth: 96,
-    alignItems: 'flex-start',
     justifyContent: 'center',
   },
-  chipActive: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
+  chipHalf: {
+    flex: 0,
+    flexGrow: 1,
+    flexBasis: '46%',
   },
   chipLabel: {
     ...typography.callout,
-    fontWeight: '600',
+    fontFamily: fonts.semibold,
     color: colors.textPrimary,
-  },
-  chipLabelActive: {
-    color: colors.textInverse,
   },
   chipHint: {
     ...typography.captionSmall,
@@ -1165,29 +1039,10 @@ const styles = StyleSheet.create({
     color: colors.textInverseMuted,
   },
 
-  // ── CTA ─────────────────────────────────────────────────────
-  ctaBlock: {
-    paddingHorizontal: spacing.screenPadding,
-    marginTop: 32,
-    alignItems: 'stretch',
+  // CTA
+  cta: {
     gap: spacing.md,
-  },
-  primaryCta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.lg,
-    borderRadius: spacing.buttonRadius,
-    backgroundColor: colors.accent,
-    ...shadows.md,
-  },
-  primaryCtaDisabled: {
-    backgroundColor: colors.neutral.slate,
-  },
-  primaryCtaText: {
-    ...typography.headline,
-    color: colors.textInverse,
+    marginTop: spacing.sm,
   },
   helperText: {
     ...typography.caption,
@@ -1195,219 +1050,182 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // ── Total card ──────────────────────────────────────────────
+  // ── Error ───────────────────────────────────────────────────
+  errorBlock: {
+    gap: spacing.md,
+    alignItems: 'stretch',
+  },
+  retryBtn: {
+    alignSelf: 'flex-start',
+    minHeight: 44,
+  },
+
+  // ── Result ──────────────────────────────────────────────────
+  result: {
+    gap: spacing.md,
+  },
+  resultHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.sm,
+  },
+  clearBtn: {
+    minHeight: 44,
+    paddingHorizontal: spacing.md,
+  },
+  section: {
+    marginTop: spacing.xl,
+    gap: spacing.md,
+  },
+  sectionHeadRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: spacing.md,
+  },
+  sectionTitle: {
+    ...typography.title,
+    color: colors.textPrimary,
+  },
+  sectionMeta: {
+    ...typography.caption,
+    color: colors.textTertiary,
+  },
+
+  // Total hero
   totalCard: {
     backgroundColor: colors.inkSurface,
     borderRadius: spacing.cardRadiusXl,
     padding: spacing.xxl,
-    borderWidth: 1,
-    borderColor: colors.inkBorderStrong,
-    overflow: 'hidden',
-    position: 'relative',
-    ...shadows.lg,
   },
-  heroAccentGlow: {
-    position: 'absolute',
-    top: -120,
-    right: -80,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: colors.accent,
-    opacity: 0.18,
+  totalCondition: {
+    ...typography.headline,
+    color: colors.textInverse,
   },
-  totalEyebrow: {
-    ...typography.overline,
-    color: colors.textInverseSubtle,
-    marginBottom: spacing.md,
+  totalBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
   totalRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
     flexWrap: 'wrap',
-    gap: spacing.sm,
+    columnGap: spacing.sm,
+    marginTop: spacing.xl,
   },
   totalValue: {
     ...typography.numeric,
-    fontSize: 30,
+    fontSize: 34,
+    lineHeight: 40,
     color: colors.textInverse,
+    fontVariant: ['tabular-nums'],
   },
   totalSeparator: {
     ...typography.numeric,
-    fontSize: 24,
+    fontSize: 28,
     color: colors.textInverseSubtle,
+  },
+  totalCaption: {
+    ...typography.caption,
+    color: colors.textInverseMuted,
+    marginTop: spacing.xs,
   },
   totalMetaRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    flexWrap: 'wrap',
     gap: spacing.sm,
-    marginTop: spacing.lg,
-    flexWrap: 'wrap',
+    marginTop: spacing.xl,
   },
-  metaPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: spacing.chipRadius,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderWidth: 1,
-    borderColor: colors.inkBorderStrong,
-  },
-  metaPillText: {
-    ...typography.captionSmall,
-    fontWeight: '600',
-    color: colors.textInverse,
-  },
-  metaDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.textInverseSubtle,
-  },
-  totalNote: {
-    ...typography.caption,
-    color: colors.textInverseMuted,
-    marginTop: spacing.lg,
-    lineHeight: 20,
-  },
-
-  smallGhostBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: spacing.chipRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    backgroundColor: colors.surface,
-  },
-  smallGhostBtnText: {
-    ...typography.captionSmall,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-
-  // ── Per-tier list ───────────────────────────────────────────
-  tierStack: {
-    backgroundColor: colors.surface,
-    borderRadius: spacing.cardRadiusLg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    overflow: 'hidden',
-  },
-  tierRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-  },
-  tierBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: spacing.chipRadius,
-    borderWidth: 1,
-  },
-  tierBadgeText: {
-    ...typography.overline,
-    fontSize: 10,
-  },
-  tierRangeText: {
-    ...typography.bodyMedium,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    fontVariant: ['tabular-nums'],
-  },
-  tierRangeSep: {
-    color: colors.textTertiary,
-    fontWeight: '400',
-  },
-
-  // ── Breakdown ───────────────────────────────────────────────
-  breakdownGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.md,
-  },
-  breakdownCard: {
-    width: '48%',
-    backgroundColor: colors.surface,
-    borderRadius: spacing.cardRadiusLg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    minHeight: 96,
-  },
-  breakdownIconBg: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    backgroundColor: colors.backgroundTertiary,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.md,
-  },
-  breakdownLabel: {
-    ...typography.overline,
-    fontSize: 10,
-    color: colors.textMuted,
-    marginBottom: 4,
-  },
-  breakdownValue: {
-    ...typography.bodyMedium,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-
-  // ── AI explanation card ─────────────────────────────────────
-  aiCard: {
-    backgroundColor: colors.surface,
-    borderRadius: spacing.cardRadiusLg,
-    padding: spacing.xl,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  aiBody: {
-    ...typography.body,
-    color: colors.textSecondary,
-  },
-  aiBadge: {
+  inversePill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingVertical: 4,
     borderRadius: spacing.chipRadius,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    backgroundColor: colors.inkSurfaceElevated,
   },
-  aiBadgeDot: {
+  inversePillText: {
+    ...typography.captionSmall,
+    fontFamily: fonts.semibold,
+    color: colors.textInverse,
+  },
+  accentDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
     backgroundColor: colors.accent,
   },
-  aiBadgeText: {
-    ...typography.overline,
-    fontSize: 10,
+  baselineRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    marginTop: spacing.xl,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.inkBorder,
+  },
+  baselineLabel: {
+    ...typography.caption,
+    color: colors.textInverseMuted,
+  },
+  baselineValue: {
+    ...typography.caption,
+    fontFamily: fonts.semibold,
+    color: colors.textInverse,
+    fontVariant: ['tabular-nums'],
+  },
+  totalNote: {
+    ...typography.caption,
+    fontFamily: fonts.regular,
+    color: colors.textInverseMuted,
+    marginTop: spacing.lg,
+    lineHeight: 20,
+  },
+
+  // Amount rows (tiers, breakdown)
+  rowList: {
+    gap: spacing.lg,
+    paddingVertical: spacing.lg,
+  },
+  amountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    minHeight: 36,
+  },
+  amountLabel: {
+    ...typography.bodyMedium,
     color: colors.textPrimary,
   },
+  amountHint: {
+    ...typography.caption,
+    color: colors.textTertiary,
+  },
+  amountValue: {
+    ...typography.callout,
+    fontFamily: fonts.semibold,
+    color: colors.textPrimary,
+    textAlign: 'right',
+    fontVariant: ['tabular-nums'],
+    flexShrink: 0,
+  },
+
+  // Reasoning
   reasoningRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.xs,
   },
   reasoningBullet: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: colors.textPrimary,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.accent,
     marginTop: 9,
   },
   reasoningText: {
@@ -1416,338 +1234,165 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
-  // ── Total card extras (AI-assisted badge + baseline compare) ───
-  totalCardTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.md,
-    gap: spacing.sm,
-    flexWrap: 'wrap',
-  },
-  refinedBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: spacing.chipRadius,
-    backgroundColor: 'rgba(255,255,255,0.10)',
-    borderWidth: 1,
-    borderColor: colors.inkBorderStrong,
-  },
-  refinedBadgeDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: colors.accent,
-  },
-  refinedBadgeText: {
-    ...typography.overline,
-    fontSize: 9,
-    color: colors.textInverse,
-  },
-  baselineCompareRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: spacing.lg,
-    paddingTop: spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: colors.inkBorder,
-  },
-  baselineCompareLabel: {
-    ...typography.captionSmall,
-    color: colors.textInverseSubtle,
-  },
-  baselineCompareValue: {
-    ...typography.caption,
-    fontWeight: '600',
-    color: colors.textInverseMuted,
-    fontVariant: ['tabular-nums'],
-  },
-
-  // ── Hospitals ───────────────────────────────────────────────
+  // Hospitals
   hospitalsList: {
-    backgroundColor: colors.surface,
-    borderRadius: spacing.cardRadiusLg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    overflow: 'hidden',
-  },
-  hospitalRow: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing.md,
-  },
-  // Bangalore-rich variant: a fuller card with doctors + fee stats.
-  hospitalCard: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
     gap: spacing.md,
   },
   hospitalTitleRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  hospitalLeft: {
-    flex: 1,
+    gap: spacing.md,
   },
   hospitalName: {
-    ...typography.bodyMedium,
-    fontWeight: '700',
+    ...typography.headline,
     color: colors.textPrimary,
     flex: 1,
   },
+  tierChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: spacing.chipRadius,
+  },
+  tierChipText: {
+    ...typography.captionSmall,
+    fontFamily: fonts.semibold,
+  },
   hospitalSubtle: {
     ...typography.caption,
-    color: colors.textTertiary,
-    marginTop: 2,
+    fontFamily: fonts.regular,
+    color: colors.textSecondary,
+    marginTop: spacing.xs,
   },
   hospitalMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginTop: spacing.sm,
     flexWrap: 'wrap',
+    columnGap: spacing.lg,
+    rowGap: spacing.xs,
+    marginTop: spacing.md,
   },
   hospitalMetaItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
   },
-  hospitalMetaText: {
-    ...typography.captionSmall,
-    fontWeight: '700',
+  hospitalRating: {
+    ...typography.caption,
+    fontFamily: fonts.semibold,
     color: colors.textPrimary,
+    fontVariant: ['tabular-nums'],
   },
-  hospitalMetaDivider: {
-    width: 3,
-    height: 3,
-    borderRadius: 1.5,
-    backgroundColor: colors.dividerStrong,
-  },
-  hospitalTierPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: spacing.chipRadius,
-    borderWidth: 1,
-  },
-  hospitalTierText: {
-    ...typography.overline,
-    fontSize: 9,
-  },
-  hospitalRelevance: {
-    ...typography.captionSmall,
+  hospitalMetaText: {
+    ...typography.caption,
     color: colors.textTertiary,
     fontVariant: ['tabular-nums'],
   },
-  emptyHospitalsCard: {
-    backgroundColor: colors.surface,
-    borderRadius: spacing.cardRadiusLg,
-    padding: spacing.xl,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+  hospitalStatsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.lg,
   },
-  emptyHospitalsText: {
+  hospitalStat: {
+    flexGrow: 1,
+    flexBasis: '46%',
+    backgroundColor: colors.background,
+    borderRadius: spacing.inputRadius,
+    padding: spacing.md,
+  },
+  hospitalStatLabel: {
+    ...typography.caption,
+    color: colors.textTertiary,
+  },
+  hospitalStatValue: {
+    ...typography.title,
+    fontSize: 20,
+    lineHeight: 26,
+    color: colors.textPrimary,
+    marginTop: 2,
+    fontVariant: ['tabular-nums'],
+  },
+  emptyText: {
     ...typography.body,
     color: colors.textSecondary,
   },
   relevanceSummary: {
     ...typography.caption,
+    fontFamily: fonts.regular,
     color: colors.textTertiary,
-    marginTop: spacing.md,
   },
 
-  // ── Bangalore-specific hospital enrichment ──────────────────
-  hospitalStatsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginTop: spacing.md,
-  },
-  hospitalStat: {
-    flexGrow: 1,
-    flexBasis: '46%',
-    backgroundColor: colors.backgroundTertiary,
-    borderRadius: spacing.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  hospitalStatLabel: {
-    ...typography.overline,
-    fontSize: 9,
-    color: colors.textMuted,
-    marginBottom: 2,
-  },
-  hospitalStatValue: {
-    ...typography.caption,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    fontVariant: ['tabular-nums'],
-  },
+  // Doctors
   doctorList: {
-    marginTop: spacing.md,
-    gap: spacing.sm,
+    marginTop: spacing.lg,
+    paddingTop: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+    gap: spacing.md,
   },
   doctorListLabel: {
-    ...typography.overline,
-    fontSize: 10,
-    color: colors.textMuted,
-    marginBottom: 2,
+    ...typography.callout,
+    fontFamily: fonts.semibold,
+    color: colors.textPrimary,
   },
   doctorRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.background,
-    borderRadius: spacing.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  doctorAvatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: colors.backgroundTertiary,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
+    gap: spacing.md,
   },
   doctorName: {
-    ...typography.caption,
-    fontWeight: '700',
+    ...typography.callout,
+    fontFamily: fonts.semibold,
     color: colors.textPrimary,
   },
   doctorMeta: {
-    ...typography.captionSmall,
+    ...typography.caption,
+    fontFamily: fonts.regular,
     color: colors.textTertiary,
     marginTop: 1,
   },
-  doctorAvailability: {
-    ...typography.captionSmall,
-    color: colors.textMuted,
-    marginTop: 1,
+  doctorFee: {
+    alignItems: 'flex-end',
   },
-  doctorFeePill: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: spacing.chipRadius,
-    backgroundColor: colors.accentMuted,
-    borderWidth: 1,
-    borderColor: colors.accentSoftBorder,
-  },
-  doctorFeeText: {
-    ...typography.captionSmall,
-    fontWeight: '700',
-    color: colors.accent,
+  doctorFeeValue: {
+    fontFamily: fonts.display,
+    fontSize: 18,
+    lineHeight: 22,
+    color: colors.textPrimary,
     fontVariant: ['tabular-nums'],
   },
-
-  // ── Total card: badge row + Bengaluru localized badge ───────
-  totalBadgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    flexWrap: 'wrap',
-  },
-  localBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: spacing.chipRadius,
-    backgroundColor: 'rgba(255,255,255,0.10)',
-    borderWidth: 1,
-    borderColor: colors.inkBorderStrong,
-  },
-  localBadgeText: {
-    ...typography.overline,
-    fontSize: 9,
-    color: colors.textInverse,
+  doctorFeeLabel: {
+    ...typography.captionSmall,
+    color: colors.textTertiary,
   },
 
   // ── Skeletons ───────────────────────────────────────────────
   skeletonRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
+    justifyContent: 'space-between',
+    paddingVertical: spacing.sm,
   },
   skeletonLine: {
-    height: 12,
-    borderRadius: 6,
+    height: 14,
+    borderRadius: 7,
     backgroundColor: colors.skeleton,
   },
-
-  // ── Error ───────────────────────────────────────────────────
-  errorCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: spacing.cardRadiusLg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.errorSoft,
-    marginHorizontal: spacing.screenPadding,
-    marginTop: 32,
-  },
-  errorIconBg: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: colors.errorSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  errorTitle: {
-    ...typography.bodyMedium,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  errorBody: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
-  retryBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: spacing.chipRadius,
-    backgroundColor: colors.inkSurface,
-  },
-  retryBtnText: {
-    ...typography.caption,
-    fontWeight: '700',
-    color: colors.textInverse,
+  skeletonLineInverse: {
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: colors.inkSurfaceElevated,
   },
 
   // ── Disclaimer ──────────────────────────────────────────────
-  disclaimerBlock: {
+  disclaimer: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: spacing.sm,
-    paddingHorizontal: spacing.screenPadding,
-    marginTop: spacing.xxl,
+    marginTop: spacing.xl,
   },
   disclaimerText: {
     ...typography.caption,
+    fontFamily: fonts.regular,
     color: colors.textTertiary,
     flex: 1,
   },

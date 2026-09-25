@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 import jwt
 from passlib.hash import bcrypt
 import asyncio
+import functools
 import json
 import base64
 from io import BytesIO
@@ -23,6 +24,7 @@ import aiomysql
 
 # Google Gemini
 import google.generativeai as genai
+from google.api_core.exceptions import ResourceExhausted
 
 # Canonical Karnataka cities list for the public GET /api/cities endpoint
 # (Requirements 10.1, 10.2, 10.3, 10.4). The tuple is converted to a list at
@@ -55,6 +57,12 @@ load_dotenv(ROOT_DIR / '.env')
 # Gemini configuration
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-1.5-flash')
+# Free-tier quotas are per model, so a 429 on one model moves on to the next.
+GEMINI_FALLBACK_MODELS = [
+    m.strip() for m in os.environ.get(
+        'GEMINI_FALLBACK_MODELS', 'gemini-3.1-flash-lite,gemini-flash-lite-latest'
+    ).split(',') if m.strip()
+]
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
@@ -406,6 +414,10 @@ async def init_db(conn: aiomysql.Connection):
         # representable.
         await _ensure_column_type(cur, "health_profiles", "sleep_hours", "INT NULL")
         await _ensure_column_type(cur, "health_profiles", "diet_type", "VARCHAR(64) NULL")
+        # The remaining legacy NOT NULL columns have no default, so the bare
+        # row a profile PATCH creates failed with errno 1364.
+        for _col in ("sleep_pattern", "hydration_level", "stress_level", "exercise_frequency"):
+            await _ensure_column_type(cur, "health_profiles", _col, "VARCHAR(64) NULL")
 
         # Requirement 12.3: family_history with unique (user_id, condition) and ON DELETE CASCADE.
         await cur.execute(
@@ -576,10 +588,27 @@ def to_dt(dt: datetime) -> datetime:
         return dt.replace(tzinfo=None)
     return dt
 
-async def gemini_generate(system_message: str, user_text: str) -> str:
+async def gemini_content(contents: Any, **model_kwargs: Any) -> Any:
+    """generate_content_async on GEMINI_MODEL, falling back on quota errors."""
+    models = [GEMINI_MODEL] + [m for m in GEMINI_FALLBACK_MODELS if m != GEMINI_MODEL]
+    for i, name in enumerate(models):
+        try:
+            model = genai.GenerativeModel(model_name=name, **model_kwargs)
+            return await model.generate_content_async(contents)
+        except ResourceExhausted:
+            if i == len(models) - 1:
+                raise
+            logging.warning(f"Gemini quota exhausted on {name}; retrying with {models[i + 1]}")
+
+
+async def gemini_generate(system_message: str, user_text: str, json_mode: bool = False) -> str:
     try:
-        model = genai.GenerativeModel(model_name=GEMINI_MODEL, system_instruction=system_message)
-        resp = await model.generate_content_async(user_text)
+        resp = await gemini_content(
+            user_text,
+            system_instruction=system_message,
+            # Forces a bare JSON body; prose around the object broke parsing.
+            generation_config={"response_mime_type": "application/json"} if json_mode else None,
+        )
         return (resp.text or "").strip()
     except Exception as e:
         logging.error(f"Gemini error: {e}")
@@ -618,12 +647,13 @@ class HealthProfileCreate(BaseModel):
 class HealthProfileResponse(BaseModel):
     id: str
     user_id: str
-    sleep_pattern: str
-    sleep_hours: int
-    hydration_level: str
-    stress_level: str
-    exercise_frequency: str
-    diet_type: str
+    # Nullable: rows created by onboarding or a profile PATCH may lack them.
+    sleep_pattern: Optional[str]
+    sleep_hours: Optional[int]
+    hydration_level: Optional[str]
+    stress_level: Optional[str]
+    exercise_frequency: Optional[str]
+    diet_type: Optional[str]
     existing_conditions: Optional[str]
     lifestyle_notes: Optional[str]
     health_persona: Optional[str]
@@ -1309,21 +1339,22 @@ async def analyze_risk(
         raise HTTPException(status_code=500, detail="Risk analysis failed")
 
     # ---- Gemini insights (Requirements 9.4, 9.5, 9.7, 9.8). ----------------
-    # The Gemini service module's own outer cap is 20 s; the analyze endpoint
-    # further constrains the wait to 15 s. Any failure path -> insights=None
-    # and ai_insights_unavailable=True; persistence still happens.
+    # gemini-2.5-flash takes 11-17 s here, so the old 15 s cap failed most
+    # first-run onboardings. The module's own cap bounds the wait; the client
+    # gives up at 30 s. Any failure path -> insights=None and
+    # ai_insights_unavailable=True; persistence still happens.
     insights_dict: Optional[Dict[str, str]] = None
     try:
         insights_dict = await asyncio.wait_for(
             gemini_insights.generate(
                 payload_dict,
                 risk,
-                gemini_call=gemini_generate,
+                gemini_call=functools.partial(gemini_generate, json_mode=True),
             ),
-            timeout=15,
+            timeout=gemini_insights.GEMINI_TIMEOUT_SECONDS + 1,
         )
     except asyncio.TimeoutError:
-        logger.warning("analyze-risk: Gemini exceeded 15 s deadline")
+        logger.warning("analyze-risk: Gemini exceeded deadline")
         insights_dict = None
     except Exception:
         logger.exception("analyze-risk: gemini_insights.generate raised")
@@ -2092,15 +2123,17 @@ async def patch_profile_section(
         try:
             async with conn.cursor() as cur:
                 # health_profiles may not exist yet for a user who has not
-                # finished onboarding; a PATCH must still work.
+                # finished onboarding; a PATCH must still work. user_id has no
+                # unique key, so ON DUPLICATE KEY would insert a row per PATCH.
                 await cur.execute(
-                    """
-                    INSERT INTO health_profiles (user_id, created_at, updated_at)
-                    VALUES (%s, %s, %s)
-                    ON DUPLICATE KEY UPDATE updated_at=VALUES(updated_at)
-                    """,
-                    (user_id, now, now),
+                    "SELECT 1 FROM health_profiles WHERE user_id=%s LIMIT 1", (user_id,)
                 )
+                if await cur.fetchone() is None:
+                    await cur.execute(
+                        "INSERT INTO health_profiles (user_id, created_at, updated_at) "
+                        "VALUES (%s, %s, %s)",
+                        (user_id, now, now),
+                    )
 
                 if patch.vitals is not None:
                     await _insert_vitals(cur, user_id, patch.vitals, now)
@@ -2114,6 +2147,7 @@ async def patch_profile_section(
                                 (user_id, name, diagnosed_bucket, control, treatment,
                                  severity, hospitalised_12m, created_at, updated_at)
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON DUPLICATE KEY UPDATE id=id
                             """,
                             (user_id, entry.name, entry.diagnosed_bucket, entry.control,
                              entry.treatment, entry.severity,
@@ -2129,6 +2163,7 @@ async def patch_profile_section(
                                 (user_id, name, dose, frequency, started_bucket,
                                  for_condition, adherence, created_at)
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            ON DUPLICATE KEY UPDATE id=id
                             """,
                             (user_id, med.name, med.dose, med.frequency,
                              med.started_bucket, med.for_condition, med.adherence, now),
@@ -2142,6 +2177,7 @@ async def patch_profile_section(
                             INSERT INTO user_allergies
                                 (user_id, allergen, category, reaction, created_at)
                             VALUES (%s, %s, %s, %s, %s)
+                            ON DUPLICATE KEY UPDATE id=id
                             """,
                             (user_id, allergy.allergen, allergy.category,
                              allergy.reaction, now),
@@ -2156,6 +2192,7 @@ async def patch_profile_section(
                                 INSERT INTO family_history
                                     (user_id, `condition`, relation, onset_bucket, created_at)
                                 VALUES (%s, %s, %s, %s, %s)
+                                ON DUPLICATE KEY UPDATE id=id
                                 """,
                                 (user_id, entry.condition, relation,
                                  entry.onset_bucket, now),
@@ -2707,8 +2744,6 @@ async def extract_text_from_image(image_data: bytes) -> str:
         import base64
         image_base64 = base64.b64encode(image_data).decode('utf-8')
         
-        model = genai.GenerativeModel(model_name=GEMINI_MODEL)
-        
         prompt = """Extract ALL text from this prescription image exactly as written. 
 Include:
 - Medication names
@@ -2719,7 +2754,7 @@ Include:
 
 Return ONLY the extracted text, nothing else."""
         
-        response = await model.generate_content_async([prompt, {"inline_data": {"mime_type": "image/jpeg", "data": image_base64}}])
+        response = await gemini_content([prompt, {"inline_data": {"mime_type": "image/jpeg", "data": image_base64}}])
         
         extracted_text = response.text.strip()
         
@@ -3326,25 +3361,27 @@ async def generate_health_report(
             raise HTTPException(status_code=404, detail="Health profile not found")
         
         profile_data = dict(profile)
-        
-        # Generate AI summary using Gemini
+        display_name = user.get("name") or username
+        clinical = await profile_context.load_full_profile(user_id, fetch_one, fetch_all)
+        rendered_profile = profile_context.render_profile_for_ai(clinical, purpose="report")
+
+        # Generate AI summary using Gemini, from the same full profile the
+        # chat uses (it previously saw five legacy fields and read NULLs as
+        # the literal "None", which it reported as alarming deficits).
         summary_prompt = f"""
-        Based on this health data, provide a comprehensive medical summary for a patient report 
-        that can be shown to a doctor. Be professional, clear, and concise.
-        
-        Patient: {username}
-        
-        Health Profile:
-        - Sleep: {profile_data.get('sleep_pattern', 'N/A')} pattern, {profile_data.get('sleep_hours', 'N/A')} hours
-        - Hydration: {profile_data.get('hydration_level', 'N/A')}
-        - Stress: {profile_data.get('stress_level', 'N/A')}
-        - Exercise: {profile_data.get('exercise_frequency', 'N/A')}
-        - Diet: {profile_data.get('diet_type', 'N/A')}
-        
-        Provide a 2-3 paragraph professional medical summary highlighting key patterns, 
-        concerns, and positive trends. Focus on actionable insights for healthcare providers.
+        Based on this health data, provide a medical summary for a patient report
+        that can be shown to a doctor. Be professional, clear, calm and concise.
+        Anything not listed or marked "not recorded" is unknown, not a deficit;
+        do not draw conclusions from missing data.
+
+        Patient: {display_name}
+
+        {rendered_profile}
+
+        Provide a 2-3 paragraph summary highlighting key patterns, concerns,
+        and positive trends. Focus on actionable insights for healthcare providers.
         """
-        
+
         try:
             ai_summary = await gemini_generate(
                 system_message="You are a medical professional creating a health summary for a patient report.",
@@ -3352,18 +3389,11 @@ async def generate_health_report(
             )
         except Exception as e:
             logger.error(f"Gemini generation failed: {e}")
-            ai_summary = f"""
-            Health Summary for {username}:
-            
-            The patient maintains a health profile with the following attributes:
-            Sleep pattern: {profile_data.get('sleep_pattern', 'N/A')}, {profile_data.get('sleep_hours', 'N/A')} hours.
-            Hydration level: {profile_data.get('hydration_level', 'N/A')}.
-            Stress level: {profile_data.get('stress_level', 'N/A')}.
-            Exercise frequency: {profile_data.get('exercise_frequency', 'N/A')}.
-            
-            This report provides a comprehensive overview of self-reported health data and should be reviewed 
-            with the patient for clinical interpretation.
-            """
+            ai_summary = (
+                f"Health summary for {display_name}. The AI summary is unavailable right now; "
+                "the sections above list the self-reported profile, which should be reviewed "
+                "with the patient for clinical interpretation."
+            )
         
         # Fetch recent prescriptions to include in the report
         try:
@@ -3387,7 +3417,7 @@ async def generate_health_report(
         try:
             if prescriptions:
                 meds_list = [p.get('medication_name') or 'Unknown' for p in prescriptions]
-                pres_prompt = f"Provide a 2-3 sentence professional summary of the following prescriptions and any high-level safety notes or common interactions. Medications: {', '.join(meds_list)}. Keep it concise for inclusion in a medical report."
+                pres_prompt = f"Provide a 2-3 sentence professional summary of the following prescriptions and any high-level safety notes or common interactions. Medications: {', '.join(meds_list)}. Patient's diagnosed conditions: {', '.join(c.get('name') for c in clinical.get('conditions') or []) or 'none recorded'}. Keep it concise for inclusion in a medical report."
                 prescription_ai_summary = await gemini_generate(
                     system_message="You are a concise clinical pharmacist summarizing prescriptions for a patient report.",
                     user_text=pres_prompt,
@@ -3397,7 +3427,7 @@ async def generate_health_report(
 
         # Generate PDF
         pdf_buffer = create_health_report_pdf(
-            username=username,
+            username=display_name,
             profile_data=profile_data,
             ai_summary=ai_summary,
             prescriptions=prescriptions,
@@ -3405,7 +3435,7 @@ async def generate_health_report(
             # Conditions, medications, allergies, vitals, family history and
             # the risk assessment — the parts that make this a handoff a
             # doctor can act on rather than a lifestyle summary.
-            clinical=await profile_context.load_full_profile(user_id, fetch_one, fetch_all),
+            clinical=clinical,
         )
         
         return StreamingResponse(

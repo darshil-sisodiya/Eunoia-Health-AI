@@ -1,18 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
 
 import OnboardingShell from '../../components/onboarding/OnboardingShell';
 import ChoiceCard from '../../components/onboarding/ChoiceCard';
 import KeyboardAwareScreenScrollView from '../../components/KeyboardAwareScreenScrollView';
+import { TextField } from '../../components/ui';
 import { type BasicProfile } from '../../contexts/OnboardingContext';
 import { useOnboardingStep } from '../../utils/useOnboardingStep';
 import { ONBOARDING_COPY } from '../../constants/onboarding';
-import { colors, spacing, typography } from '../../constants/theme';
+import { colors, fonts, spacing, typography } from '../../constants/theme';
 import type { Gender } from '../../utils/onboardingApi';
 
 /**
@@ -31,9 +27,7 @@ import type { Gender } from '../../utils/onboardingApi';
  * (Requirement 3.9), the values are confirmed and the flow moves to
  * step 3 (Lifestyle).
  *
- * All visual values consume tokens from `frontend/constants/theme.ts`
- * and copy from `ONBOARDING_COPY.basic`; no inline color, spacing, or
- * typography literals.
+ * Text inputs use the shared `TextField`; copy lives in `ONBOARDING_COPY.basic`.
  */
 
 // ── Field model ───────────────────────────────────────────────────
@@ -180,6 +174,8 @@ export default function Basic() {
   // visible at once even if some fields were never blurred.
   const [showAllErrors, setShowAllErrors] = useState(false);
   const hydratedFromDraftRef = useRef(false);
+  const ageRef = useRef<TextInput>(null);
+  const weightRef = useRef<TextInput>(null);
 
   // Hydrate local state from `OnboardingContext.draft.basic` on mount.
   useEffect(() => {
@@ -278,67 +274,51 @@ export default function Basic() {
         style={styles.keyboardScroll}
         contentContainerStyle={styles.scroll}
       >
-          {/* ── Heading ─────────────────────────────── */}
-          <View style={styles.heading}>
-            <Text style={styles.headline}>{C.headline}</Text>
-            <Text style={styles.subtitle}>{C.subtitle}</Text>
-          </View>
+        <View style={styles.heading}>
+          <Text style={styles.headline} accessibilityRole="header">
+            {C.headline}
+          </Text>
+          <Text style={styles.subtitle}>{C.subtitle}</Text>
+        </View>
 
-          {/* ── Full name ───────────────────────────── */}
-          <Field
+        <View style={styles.form}>
+          <TextField
             label={C.fields.fullName.label}
             hint={C.fields.fullName.hint}
             error={visibleErrors.fullName}
-          >
-            <TextInput
-              value={input.fullName}
-              onChangeText={(v) => update('fullName', v)}
-              onBlur={() => blur('fullName')}
-              placeholder={C.fields.fullName.placeholder}
-              placeholderTextColor={colors.textMuted}
-              maxLength={80}
-              autoCapitalize="words"
-              autoCorrect={false}
-              returnKeyType="next"
-              style={[
-                styles.input,
-                visibleErrors.fullName ? styles.inputError : null,
-              ]}
-              accessibilityLabel={C.fields.fullName.label}
-              accessibilityHint={C.fields.fullName.hint}
-            />
-          </Field>
+            value={input.fullName}
+            onChangeText={(v) => update('fullName', v)}
+            onBlur={() => blur('fullName')}
+            placeholder={C.fields.fullName.placeholder}
+            maxLength={80}
+            autoCapitalize="words"
+            autoCorrect={false}
+            autoComplete="name"
+            textContentType="name"
+            returnKeyType="next"
+            onSubmitEditing={() => ageRef.current?.focus()}
+            submitBehavior="submit"
+            accessibilityHint={C.fields.fullName.hint}
+          />
 
-          {/* ── Age ─────────────────────────────────── */}
-          <Field
+          <TextField
+            ref={ageRef}
             label={C.fields.age.label}
             hint={C.fields.age.hint}
             error={visibleErrors.age}
-          >
-            <TextInput
-              value={input.age}
-              onChangeText={(v) => update('age', v.replace(/[^\d]/g, ''))}
-              onBlur={() => blur('age')}
-              placeholder={C.fields.age.placeholder}
-              placeholderTextColor={colors.textMuted}
-              keyboardType="number-pad"
-              maxLength={3}
-              returnKeyType="next"
-              style={[
-                styles.input,
-                visibleErrors.age ? styles.inputError : null,
-              ]}
-              accessibilityLabel={C.fields.age.label}
-              accessibilityHint={C.fields.age.hint}
-            />
-          </Field>
+            value={input.age}
+            onChangeText={(v) => update('age', v.replace(/[^\d]/g, ''))}
+            onBlur={() => blur('age')}
+            placeholder={C.fields.age.placeholder}
+            keyboardType="number-pad"
+            maxLength={3}
+            returnKeyType="done"
+            accessibilityHint={C.fields.age.hint}
+          />
 
-          {/* ── Gender ──────────────────────────────── */}
-          <Field
-            label={C.fields.gender.label}
-            error={visibleErrors.gender}
-          >
-            <View style={styles.genderColumn}>
+          <View style={styles.field}>
+            <Text style={styles.label}>{C.fields.gender.label}</Text>
+            <View style={styles.genderColumn} accessibilityRole="radiogroup">
               {C.fields.gender.options.map((opt) => (
                 <ChoiceCard
                   key={opt.value}
@@ -352,85 +332,46 @@ export default function Basic() {
                 />
               ))}
             </View>
-          </Field>
+            {visibleErrors.gender ? (
+              <Text style={styles.errorText} accessibilityLiveRegion="polite">
+                {visibleErrors.gender}
+              </Text>
+            ) : null}
+          </View>
 
-          {/* ── Height ──────────────────────────────── */}
-          <Field
+          <TextField
             label={`${C.fields.heightCm.label} (${C.fields.heightCm.unit})`}
             hint={C.fields.heightCm.hint}
             error={visibleErrors.heightCm}
-          >
-            <TextInput
-              value={input.heightCm}
-              onChangeText={(v) =>
-                update('heightCm', v.replace(/[^\d.]/g, ''))
-              }
-              onBlur={() => blur('heightCm')}
-              placeholder={C.fields.heightCm.placeholder}
-              placeholderTextColor={colors.textMuted}
-              keyboardType="decimal-pad"
-              maxLength={6}
-              returnKeyType="next"
-              style={[
-                styles.input,
-                visibleErrors.heightCm ? styles.inputError : null,
-              ]}
-              accessibilityLabel={C.fields.heightCm.label}
-              accessibilityHint={C.fields.heightCm.hint}
-            />
-          </Field>
+            value={input.heightCm}
+            onChangeText={(v) => update('heightCm', v.replace(/[^\d.]/g, ''))}
+            onBlur={() => blur('heightCm')}
+            placeholder={C.fields.heightCm.placeholder}
+            keyboardType="decimal-pad"
+            maxLength={6}
+            returnKeyType="next"
+            onSubmitEditing={() => weightRef.current?.focus()}
+            submitBehavior="submit"
+            accessibilityHint={C.fields.heightCm.hint}
+          />
 
-          {/* ── Weight ──────────────────────────────── */}
-          <Field
+          <TextField
+            ref={weightRef}
             label={`${C.fields.weightKg.label} (${C.fields.weightKg.unit})`}
             hint={C.fields.weightKg.hint}
             error={visibleErrors.weightKg}
-          >
-            <TextInput
-              value={input.weightKg}
-              onChangeText={(v) =>
-                update('weightKg', v.replace(/[^\d.]/g, ''))
-              }
-              onBlur={() => blur('weightKg')}
-              placeholder={C.fields.weightKg.placeholder}
-              placeholderTextColor={colors.textMuted}
-              keyboardType="decimal-pad"
-              maxLength={6}
-              returnKeyType="done"
-              style={[
-                styles.input,
-                visibleErrors.weightKg ? styles.inputError : null,
-              ]}
-              accessibilityLabel={C.fields.weightKg.label}
-              accessibilityHint={C.fields.weightKg.hint}
-            />
-          </Field>
+            value={input.weightKg}
+            onChangeText={(v) => update('weightKg', v.replace(/[^\d.]/g, ''))}
+            onBlur={() => blur('weightKg')}
+            placeholder={C.fields.weightKg.placeholder}
+            keyboardType="decimal-pad"
+            maxLength={6}
+            returnKeyType="done"
+            accessibilityHint={C.fields.weightKg.hint}
+          />
+        </View>
       </KeyboardAwareScreenScrollView>
     </OnboardingShell>
-  );
-}
-
-// ── Field row helper ──────────────────────────────────────────────
-interface FieldProps {
-  label: string;
-  hint?: string;
-  error?: string;
-  children: React.ReactNode;
-}
-
-function Field({ label, hint, error, children }: FieldProps) {
-  return (
-    <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
-      {children}
-      {error ? (
-        <Text style={styles.errorText} accessibilityLiveRegion="polite">
-          {error}
-        </Text>
-      ) : hint ? (
-        <Text style={styles.hintText}>{hint}</Text>
-      ) : null}
-    </View>
   );
 }
 
@@ -443,7 +384,7 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xxxl,
   },
   heading: {
-    marginBottom: spacing.xl,
+    marginBottom: spacing.xxl,
   },
   headline: {
     ...typography.largeTitle,
@@ -454,36 +395,20 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textSecondary,
   },
+  form: {
+    gap: spacing.xl,
+  },
   field: {
-    marginBottom: spacing.xl,
+    gap: spacing.sm,
   },
   label: {
     ...typography.callout,
+    fontFamily: fonts.semibold,
     color: colors.textPrimary,
-    marginBottom: spacing.sm,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    borderRadius: spacing.cardRadius,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    backgroundColor: colors.surface,
-    ...typography.body,
-    color: colors.textPrimary,
-  },
-  inputError: {
-    borderColor: colors.error,
   },
   errorText: {
     ...typography.caption,
     color: colors.error,
-    marginTop: spacing.xs,
-  },
-  hintText: {
-    ...typography.caption,
-    color: colors.textTertiary,
-    marginTop: spacing.xs,
   },
   genderColumn: {
     gap: spacing.sm,

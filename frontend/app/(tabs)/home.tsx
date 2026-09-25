@@ -6,12 +6,13 @@ import {
   ScrollView,
   RefreshControl,
   ActivityIndicator,
-  TouchableOpacity,
-  Dimensions,
+  Pressable,
   Modal,
   Vibration,
-  Platform,
   Alert,
+  Animated,
+  Easing,
+  AccessibilityInfo,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,87 +21,125 @@ import axios from 'axios';
 import { API_BASE_URL } from '../../utils/api';
 import { type AnalyzeRiskResponse } from '../../utils/onboardingApi';
 import { useRouter } from 'expo-router';
-import { colors, spacing, shadows, typography } from '../../constants/theme';
+import { colors, fonts, spacing, shadows, typography } from '../../constants/theme';
 import { componentBars } from '../../utils/riskView';
-import {
-  ConfidencePill,
-  toneColors,
-} from '../../components/health/RiskBreakdown';
+import { ONBOARDING_COPY } from '../../constants/onboarding';
+import { ConfidencePill, toneColors } from '../../components/health/RiskBreakdown';
 import CompletenessCard from '../../components/health/CompletenessCard';
 import { useHealthProfile } from '../../contexts/HealthProfileContext';
-import Svg, { Circle } from 'react-native-svg';
+import { Button, IconButton, tap } from '../../components/ui';
+import Svg, { Circle, Path } from 'react-native-svg';
 import { Pedometer } from 'expo-sensors';
 import * as Linking from 'expo-linking';
+import { getMe } from '../../utils/costEstimatorApi';
 
 const BACKEND_URL = API_BASE_URL;
-const SCREEN_WIDTH = Dimensions.get('window').width;
 const DAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const STEP_GOAL_DEFAULT = 6000;
 
-// ─── Circular Progress (Monochrome on dark hero) ─────────────────
-function StepCircle({ steps, goal }: { steps: number; goal: number }) {
-  const size = 156;
-  const strokeWidth = 8;
-  const radius = (size - strokeWidth) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const progress = Math.min(steps / goal, 1);
-  const strokeDashoffset = circumference * (1 - progress);
-  const pct = Math.round(progress * 100);
+const AnimatedPath = Animated.createAnimatedComponent(Path);
+
+// ─── Sunrise: today's steps as a sun climbing a half-circle ─────
+// The one orchestrated motion on the screen: the arc sweeps up to
+// today's progress on load (skipped when the OS asks for reduced motion).
+function Sunrise({ steps, goal }: { steps: number; goal: number }) {
+  const width = 280;
+  const stroke = 14;
+  const r = (width - stroke) / 2;
+  const cy = r + stroke / 2;
+  const height = cy + stroke / 2;
+  const arcLength = Math.PI * r;
+  const progress = Math.min(steps / Math.max(goal, 1), 1);
+  const d = `M ${stroke / 2} ${cy} A ${r} ${r} 0 0 1 ${width - stroke / 2} ${cy}`;
+
+  const sweep = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .catch(() => false)
+      .then((reduce) => {
+        if (!alive) return;
+        if (reduce) {
+          sweep.setValue(progress);
+          return;
+        }
+        Animated.timing(sweep, {
+          toValue: progress,
+          duration: 1100,
+          delay: 150,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: false,
+        }).start();
+      });
+    return () => {
+      alive = false;
+    };
+  }, [progress, sweep]);
+
+  const dashOffset = sweep.interpolate({ inputRange: [0, 1], outputRange: [arcLength, 0] });
+  const remaining = Math.max(goal - steps, 0);
 
   return (
-    <View style={styles.stepCircleContainer}>
-      <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }] }}>
-        <Circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          stroke="rgba(255,255,255,0.10)"
-          strokeWidth={strokeWidth}
+    <View
+      style={styles.sunrise}
+      accessible
+      accessibilityLabel={`${steps.toLocaleString()} of ${goal.toLocaleString()} steps today`}
+    >
+      <Svg width={width} height={height}>
+        <Path d={d} stroke="rgba(255,255,255,0.12)" strokeWidth={stroke} fill="none" strokeLinecap="round" />
+        <AnimatedPath
+          d={d}
+          stroke={colors.accent}
+          strokeWidth={stroke}
           fill="none"
-        />
-        <Circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          stroke={colors.textInverse}
-          strokeWidth={strokeWidth}
-          fill="none"
-          strokeDasharray={`${circumference}`}
-          strokeDashoffset={strokeDashoffset}
           strokeLinecap="round"
+          strokeDasharray={`${arcLength} ${arcLength}`}
+          strokeDashoffset={dashOffset as any}
         />
       </Svg>
-      <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }] as any}>
-        <Text style={styles.stepCountText}>{steps.toLocaleString()}</Text>
-        <Text style={styles.stepLabel}>STEPS · {pct}%</Text>
+      <View style={styles.sunriseCenter}>
+        <Text style={styles.stepCount}>{steps.toLocaleString()}</Text>
+        <Text style={styles.stepGoal}>
+          {remaining > 0
+            ? `${remaining.toLocaleString()} steps to your ${goal.toLocaleString()} goal`
+            : `Goal of ${goal.toLocaleString()} reached`}
+        </Text>
       </View>
     </View>
   );
 }
 
-// ─── Mini Week Calendar (monochrome dots) ───────────────────────
-function WeekCalendar({ weekData }: { weekData: any[] }) {
+// ─── Week strip: one mark per day, on the indigo hero ───────────
+function WeekStrip({ weekData }: { weekData: any[] }) {
   const todayIndex = new Date().getDay();
   return (
-    <View style={styles.weekContainer}>
+    <View style={styles.weekStrip}>
       {DAY_LABELS.map((label, i) => {
         const isToday = i === todayIndex;
-        const dayData = weekData[i];
-        const reachedGoal = dayData && dayData.goal_reached;
-        const hasSteps = dayData && dayData.step_count > 0;
+        const day = weekData[i];
+        const reached = !!day?.goal_reached;
+        const walked = (day?.step_count ?? 0) > 0;
         return (
-          <View key={`${label}-${i}`} style={styles.weekDayCol}>
-            <Text style={[styles.weekDayLabel, isToday && styles.weekDayLabelActive]}>{label}</Text>
+          <View
+            key={`${label}-${i}`}
+            style={styles.weekDay}
+            accessible
+            accessibilityLabel={`${DAY_NAMES[i]}${isToday ? ', today' : ''}: ${
+              reached ? 'goal met' : walked ? `${day.step_count} steps` : 'no steps'
+            }`}
+          >
             <View
               style={[
-                styles.weekDot,
-                hasSteps && styles.weekDotPartial,
-                reachedGoal && styles.weekDotSuccess,
-                isToday && styles.weekDotToday,
+                styles.weekMark,
+                walked && styles.weekMarkWalked,
+                reached && styles.weekMarkReached,
+                isToday && !reached && styles.weekMarkToday,
               ]}
             >
-              {isToday && <View style={styles.weekDotInner} />}
+              {reached ? <Ionicons name="checkmark" size={12} color={colors.textPrimary} /> : null}
             </View>
+            <Text style={[styles.weekLabel, isToday && styles.weekLabelToday]}>{label}</Text>
           </View>
         );
       })}
@@ -108,68 +147,65 @@ function WeekCalendar({ weekData }: { weekData: any[] }) {
   );
 }
 
-// ─── Activity Bar Chart (monochrome with cobalt accent) ────────
-function ActivityBarChart({ weekData, meditationData }: { weekData: any[]; meditationData: any[] }) {
-  const maxSteps = Math.max(...weekData.map((d: any) => d.step_count || 0), 1);
-  const maxMed = Math.max(...meditationData.map((d: any) => d.total_seconds || 0), 1);
+// ─── Weekly activity chart ──────────────────────────────────────
+function ActivityChart({ weekData, meditationData }: { weekData: any[]; meditationData: any[] }) {
+  const maxSteps = Math.max(...weekData.map((d: any) => d?.step_count || 0), 1);
+  const maxMed = Math.max(...meditationData.map((d: any) => d?.total_seconds || 0), 1);
   const todayIndex = new Date().getDay();
+  const H = 112;
 
   return (
-    <View style={styles.chartContainer}>
+    <View>
       <View style={styles.chartBars}>
         {DAY_LABELS.map((label, i) => {
           const daySteps = weekData[i]?.step_count || 0;
           const dayMed = meditationData[i]?.total_seconds || 0;
-          const stepH = Math.max((daySteps / maxSteps) * 96, daySteps > 0 ? 8 : 4);
-          const medH = Math.max((dayMed / maxMed) * 96, dayMed > 0 ? 8 : 0);
-          const goalReached = weekData[i]?.goal_reached;
+          const stepH = daySteps > 0 ? Math.max((daySteps / maxSteps) * H, 6) : 3;
+          const medH = dayMed > 0 ? Math.max((dayMed / maxMed) * H * 0.6, 6) : 0;
+          const reached = weekData[i]?.goal_reached;
           const isToday = i === todayIndex;
           return (
-            <View key={`chart-${label}-${i}`} style={styles.chartBarGroup}>
-              <View style={styles.barPair}>
+            <View key={`chart-${i}`} style={styles.chartCol}>
+              <View style={[styles.chartPlot, { height: H }]}>
                 <View
                   style={[
                     styles.bar,
                     { height: stepH },
-                    goalReached
-                      ? styles.barFilled
-                      : isToday
-                      ? styles.barToday
-                      : daySteps > 0
-                      ? styles.barPartial
-                      : styles.barEmpty,
+                    reached ? styles.barReached : daySteps > 0 ? styles.barSteps : styles.barEmpty,
                   ]}
                 />
-                {medH > 0 && (
-                  <View style={[styles.bar, styles.barMeditation, { height: medH, marginLeft: 4, width: 6 }]} />
-                )}
+                {medH > 0 ? <View style={[styles.barMed, { height: medH }]} /> : null}
               </View>
-              <Text style={[styles.chartBarLabel, isToday && styles.chartBarLabelActive]}>{label}</Text>
+              <Text style={[styles.chartLabel, isToday && styles.chartLabelToday]}>{label}</Text>
             </View>
           );
         })}
       </View>
-      <View style={styles.chartLegend}>
-        <View style={styles.legendItem}>
-          <View style={[styles.legendDot, { backgroundColor: colors.textPrimary }]} />
-          <Text style={styles.legendText}>Steps</Text>
-        </View>
-        <View style={styles.legendItem}>
-          <View style={[styles.legendDot, { backgroundColor: colors.accent }]} />
-          <Text style={styles.legendText}>Meditation</Text>
-        </View>
+      <View style={styles.legend}>
+        <LegendDot color={colors.textPrimary} label="Steps" />
+        <LegendDot color={colors.accent} label="Goal met" />
+        <LegendDot color={colors.textMuted} label="Meditation" />
       </View>
     </View>
   );
 }
 
-// ─── Meditation Timer Modal ─────────────────────────────────────
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <View style={styles.legendItem}>
+      <View style={[styles.legendDot, { backgroundColor: color }]} />
+      <Text style={styles.legendText}>{label}</Text>
+    </View>
+  );
+}
+
+// ─── Meditation sheet ───────────────────────────────────────────
 const TIMER_PRESETS = [
-  { label: '1m', seconds: 60 },
-  { label: '3m', seconds: 180 },
-  { label: '5m', seconds: 300 },
-  { label: '10m', seconds: 600 },
-  { label: '15m', seconds: 900 },
+  { label: '1 min', seconds: 60 },
+  { label: '3 min', seconds: 180 },
+  { label: '5 min', seconds: 300 },
+  { label: '10 min', seconds: 600 },
+  { label: '15 min', seconds: 900 },
 ];
 
 function MeditationModal({
@@ -229,42 +265,37 @@ function MeditationModal({
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
-  const progress = isRunning || remainingSeconds === 0 ? 1 - remainingSeconds / totalRef.current : 0;
-  const circSize = 220;
-  const circStroke = 6;
+  const done = remainingSeconds === 0;
+  const progress = isRunning || done ? 1 - remainingSeconds / totalRef.current : 0;
+  const circSize = 232;
+  const circStroke = 10;
   const circRadius = (circSize - circStroke) / 2;
   const circCircumference = 2 * Math.PI * circRadius;
 
   return (
-    <Modal visible={visible} animationType="slide" transparent>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHandle} />
-          <View style={styles.modalHeader}>
-            <View>
-              <Text style={styles.modalEyebrow}>Session</Text>
-              <Text style={styles.modalTitle}>Meditation</Text>
+        <Pressable style={StyleSheet.absoluteFill} onPress={isRunning ? undefined : onClose} accessibilityLabel="Close" />
+        <View style={styles.sheet}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.sheetHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sheetTitle}>Meditate</Text>
+              <Text style={styles.sheetSubtitle}>
+                {isRunning ? 'Breathe slowly. You can end early at any time.' : 'Pick a length, then begin.'}
+              </Text>
             </View>
-            <TouchableOpacity onPress={onClose} style={styles.modalCloseBtn} activeOpacity={0.7}>
-              <Ionicons name="close" size={20} color={colors.textPrimary} />
-            </TouchableOpacity>
+            <IconButton icon="close" label="Close" onPress={onClose} />
           </View>
 
-          <View style={{ alignItems: 'center', marginVertical: 36 }}>
+          <View style={styles.timerWrap}>
             <Svg width={circSize} height={circSize} style={{ transform: [{ rotate: '-90deg' }] }}>
+              <Circle cx={circSize / 2} cy={circSize / 2} r={circRadius} stroke={colors.backgroundTertiary} strokeWidth={circStroke} fill="none" />
               <Circle
                 cx={circSize / 2}
                 cy={circSize / 2}
                 r={circRadius}
-                stroke={colors.divider}
-                strokeWidth={circStroke}
-                fill="none"
-              />
-              <Circle
-                cx={circSize / 2}
-                cy={circSize / 2}
-                r={circRadius}
-                stroke={colors.textPrimary}
+                stroke={colors.accent}
                 strokeWidth={circStroke}
                 fill="none"
                 strokeDasharray={`${circCircumference}`}
@@ -272,177 +303,126 @@ function MeditationModal({
                 strokeLinecap="round"
               />
             </Svg>
-            <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }] as any}>
-              <Text style={styles.timerText}>{formatTime(remainingSeconds)}</Text>
-              <Text style={styles.timerLabel}>REMAINING</Text>
-            </View>
-          </View>
-
-          {!isRunning && remainingSeconds > 0 && (
-            <View style={styles.presetRow}>
-              {TIMER_PRESETS.map((p, idx) => (
-                <TouchableOpacity
-                  key={p.seconds}
-                  style={[styles.presetChip, idx === selectedPreset && styles.presetChipActive]}
-                  onPress={() => {
-                    setSelectedPreset(idx);
-                    setRemainingSeconds(p.seconds);
-                  }}
-                  activeOpacity={0.85}
-                >
-                  <Text style={[styles.presetChipText, idx === selectedPreset && styles.presetChipTextActive]}>
-                    {p.label}
+            <View style={styles.timerCenter}>
+              {done ? (
+                <>
+                  <Ionicons name="checkmark-circle" size={40} color={colors.success} />
+                  <Text style={styles.timerDone}>Session saved</Text>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.timerText} accessibilityLiveRegion="polite">
+                    {formatTime(remainingSeconds)}
                   </Text>
-                </TouchableOpacity>
-              ))}
+                  <Text style={styles.timerLabel}>{isRunning ? 'remaining' : 'minutes'}</Text>
+                </>
+              )}
             </View>
-          )}
-
-          <View style={{ alignItems: 'center', marginTop: 32 }}>
-            {!isRunning && remainingSeconds > 0 && (
-              <TouchableOpacity onPress={startTimer} activeOpacity={0.9} style={styles.meditationStartBtn}>
-                <Ionicons name="play" size={18} color={colors.textInverse} />
-                <Text style={styles.meditationStartBtnText}>Begin session</Text>
-              </TouchableOpacity>
-            )}
-            {isRunning && (
-              <TouchableOpacity style={styles.meditationStopBtn} onPress={stopTimer} activeOpacity={0.9}>
-                <Ionicons name="stop" size={18} color={colors.textPrimary} />
-                <Text style={styles.meditationStopBtnText}>End session</Text>
-              </TouchableOpacity>
-            )}
-            {remainingSeconds === 0 && (
-              <View style={{ alignItems: 'center' }}>
-                <View style={styles.completedIcon}>
-                  <Ionicons name="checkmark" size={28} color={colors.textInverse} />
-                </View>
-                <Text style={styles.completedText}>Session complete</Text>
-              </View>
-            )}
           </View>
+
+          {!isRunning && !done ? (
+            <View style={styles.presetRow} accessibilityRole="radiogroup">
+              {TIMER_PRESETS.map((p, idx) => {
+                const selected = idx === selectedPreset;
+                return (
+                  <Pressable
+                    key={p.seconds}
+                    style={[styles.preset, selected && styles.presetActive]}
+                    onPress={() => {
+                      tap();
+                      setSelectedPreset(idx);
+                      setRemainingSeconds(p.seconds);
+                    }}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected }}
+                  >
+                    <Text style={[styles.presetText, selected && styles.presetTextActive]}>{p.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
+
+          {!isRunning && !done ? <Button label="Begin session" icon="play" onPress={startTimer} /> : null}
+          {isRunning ? <Button label="End session" variant="secondary" icon="stop" onPress={stopTimer} /> : null}
         </View>
       </View>
     </Modal>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════
-// ─── Risk Score Card ────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════
+// ─── Wellness report card ───────────────────────────────────────
+function WellnessCard({ report, onPress }: { report: AnalyzeRiskResponse | null; onPress: () => void }) {
+  const tone = toneColors(report?.risk_level ?? null);
 
-function RiskScoreCard({
-  report,
-  onPress,
-}: {
-  report: AnalyzeRiskResponse | null;
-  onPress: () => void;
-}) {
-  const hasReport = report !== null;
-  const score = hasReport ? report!.wellness_score : null;
-  const riskLevel = hasReport ? report!.risk_level : null;
-
-  // Resolved from one shared mapping. The inline ternary this replaces fell
-  // through to its `else` for any level it did not name, so the new
-  // 'Very High' level would have rendered in the calm accent tone - visually
-  // identical to 'Low'.
-  const tone = toneColors(riskLevel);
-
-  return (
-    <View style={riskCardStyles.section}>
-      <View style={riskCardStyles.sectionHeader}>
-        <View style={riskCardStyles.sectionHeaderLeft}>
-          <Text style={riskCardStyles.sectionEyebrow}>01</Text>
-          <Text style={riskCardStyles.sectionTitle}>Risk Score</Text>
+  if (!report) {
+    return (
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [styles.card, styles.emptyCard, pressed && styles.pressed]}
+        accessibilityRole="button"
+        accessibilityLabel="Build your health profile to get your risk score"
+      >
+        <View style={styles.emptyIcon}>
+          <Ionicons name="pulse" size={22} color={colors.textPrimary} />
         </View>
-        {hasReport && (
-          <Text style={riskCardStyles.sectionMeta}>
-            {formatShortDate(report!.created_at)}
-          </Text>
-        )}
+        <View style={{ flex: 1 }}>
+          <Text style={styles.cardTitle}>Get your risk score</Text>
+          <Text style={styles.cardBody}>Answer a few questions about your health. It takes about 4 minutes.</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+      </Pressable>
+    );
+  }
+
+  const bars = componentBars(report).slice(0, 4);
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.card, pressed && styles.pressed]}
+      accessibilityRole="button"
+      accessibilityLabel={`${ONBOARDING_COPY.result.scoreLabel} ${report.risk_score} ${ONBOARDING_COPY.result.scoreOutOf}, ${report.risk_level} risk. Open full report.`}
+    >
+      <View style={styles.cardHead}>
+        <Text style={styles.cardTitle}>{ONBOARDING_COPY.result.scoreLabel}</Text>
+        <View style={styles.cardHeadRight}>
+          <Text style={styles.cardMeta}>{formatShortDate(report.created_at)}</Text>
+          <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+        </View>
       </View>
 
-      <TouchableOpacity
-        style={riskCardStyles.card}
-        onPress={onPress}
-        activeOpacity={0.85}
-        accessibilityRole="button"
-        accessibilityLabel={
-          hasReport
-            ? `Open health report. Wellness score ${score} out of 100. Risk level ${riskLevel}.`
-            : 'Start onboarding to generate your health report.'
-        }
-      >
-        {hasReport ? (
-          <>
-            <View style={riskCardStyles.cardLeft}>
-              <Text style={riskCardStyles.scoreLabel}>WELLNESS</Text>
-              <View style={riskCardStyles.scoreRow}>
-                <Text style={riskCardStyles.scoreValue}>{score}</Text>
-                <Text style={riskCardStyles.scoreSuffix}>/100</Text>
-              </View>
-              <View
-                style={[
-                  riskCardStyles.riskSummary,
-                  {
-                    backgroundColor: tone.bg,
-                    borderLeftColor: tone.fg,
-                  },
-                ]}
-              >
-                <Text style={riskCardStyles.riskSummaryLabel}>RISK LEVEL</Text>
-                <Text style={[riskCardStyles.riskSummaryValue, { color: tone.fg }]}>
-                  {riskLevel}
-                </Text>
-              </View>
-              {/* How much of the picture this is based on. Without it a score
-                  built on three answers looks as solid as one built on twenty. */}
-              <View style={riskCardStyles.confidenceWrap}>
-                <ConfidencePill report={report} />
-              </View>
-            </View>
-
-            <View style={riskCardStyles.cardRight}>
-              <View style={riskCardStyles.miniBars}>
-                {componentBars(report).slice(0, 4).map((row) => (
-                  <View key={row.id} style={riskCardStyles.miniBarRow}>
-                    <Text style={riskCardStyles.miniBarLabel} numberOfLines={1}>
-                      {row.label}
-                    </Text>
-                    <View style={riskCardStyles.miniBarTrack}>
-                      <View
-                        style={[
-                          riskCardStyles.miniBarFill,
-                          // Against this component's own cap, so a bar is only
-                          // full when the component actually is.
-                          { width: `${Math.max(row.fraction * 100, 4)}%` },
-                        ]}
-                      />
-                    </View>
-                  </View>
-                ))}
-              </View>
-              <View style={riskCardStyles.cardCta}>
-                <Text style={riskCardStyles.cardCtaText}>View report</Text>
-                <Ionicons name="arrow-forward" size={14} color={colors.textPrimary} />
-              </View>
-            </View>
-          </>
-        ) : (
-          <View style={riskCardStyles.emptyState}>
-            <View style={riskCardStyles.emptyIcon}>
-              <Ionicons name="pulse" size={20} color={colors.textPrimary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={riskCardStyles.emptyTitle}>No report yet</Text>
-              <Text style={riskCardStyles.emptyBody}>
-                Complete onboarding to generate your wellness score.
-              </Text>
-            </View>
-            <Ionicons name="arrow-forward" size={16} color={colors.textTertiary} />
+      <View style={styles.scoreRow}>
+        <Text style={styles.scoreValue}>{report.risk_score}</Text>
+        <View style={styles.scoreSide}>
+          <Text style={styles.scoreOutOf}>{ONBOARDING_COPY.result.scoreOutOf}</Text>
+          <View style={[styles.riskChip, { backgroundColor: tone.bg }]}>
+            <View style={[styles.riskDot, { backgroundColor: tone.fg }]} />
+            <Text style={[styles.riskChipText, { color: tone.fg }]}>{report.risk_level} risk</Text>
           </View>
-        )}
-      </TouchableOpacity>
-    </View>
+        </View>
+      </View>
+
+      {bars.length > 0 ? (
+        <View style={styles.miniBars}>
+          {bars.map((row) => (
+            <View key={row.id} style={styles.miniBarRow}>
+              <Text style={styles.miniBarLabel} numberOfLines={1}>
+                {row.label}
+              </Text>
+              <View style={styles.miniBarTrack}>
+                {/* Against the component's own cap, so a bar is only full when the component is. */}
+                <View style={[styles.miniBarFill, { width: `${Math.max(row.fraction * 100, 3)}%` }]} />
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      {/* How much of the picture this is based on. */}
+      <View style={styles.confidence}>
+        <ConfidencePill report={report} />
+      </View>
+    </Pressable>
   );
 }
 
@@ -453,15 +433,40 @@ function formatShortDate(iso: string | undefined): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-// `aggregateByComponent` lived here. It summed raw factor deltas and scaled
-// them against the user's own largest bucket, which meant everybody's worst
-// component rendered as a full bar - a Low-risk user looked maxed out.
-// `componentBars` in utils/riskView.ts draws against each component's
-// published cap instead, which is why the API now returns those caps.
+// ─── Small pressable tile ───────────────────────────────────────
+function Tile({
+  icon,
+  title,
+  detail,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  detail: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={() => {
+        tap();
+        onPress();
+      }}
+      style={({ pressed }) => [styles.tile, pressed && styles.pressed]}
+      accessibilityRole="button"
+      accessibilityLabel={`${title}. ${detail}`}
+    >
+      <View style={styles.tileIcon}>
+        <Ionicons name={icon} size={20} color={colors.textPrimary} />
+      </View>
+      <Text style={styles.tileTitle}>{title}</Text>
+      <Text style={styles.tileDetail} numberOfLines={2}>
+        {detail}
+      </Text>
+    </Pressable>
+  );
+}
 
-// ═══════════════════════════════════════════════════════════════
-// ─── Home Screen ────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════
+// ─── Home ───────────────────────────────────────────────────────
 
 export default function Home() {
   const { token, username } = useAuth();
@@ -478,6 +483,14 @@ export default function Home() {
   const [meditationWeek, setMeditationWeek] = useState<any[]>([]);
   const [totalMeditationMin, setTotalMeditationMin] = useState(0);
   const [showMeditation, setShowMeditation] = useState(false);
+  const [fullName, setFullName] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token) return;
+    getMe(token)
+      .then((me) => setFullName(me?.name ?? null))
+      .catch(() => {});
+  }, [token]);
 
   // Sourced from the shared store rather than a screen-local fetch, so a
   // profile edit made anywhere updates the score shown here.
@@ -654,9 +667,16 @@ export default function Home() {
     return 'Good evening';
   };
 
-  const trendIcon = walkingTrend === 'up' ? 'trending-up' : walkingTrend === 'down' ? 'trending-down' : 'pulse';
-  const trendColor = walkingTrend === 'up' ? colors.success : walkingTrend === 'down' ? colors.error : colors.accent;
-  const totalWeekSteps = weekSteps.reduce((sum, d) => sum + (d.step_count || 0), 0);
+
+  const totalWeekSteps = weekSteps.reduce((sum, d) => sum + (d?.step_count || 0), 0);
+  const trend =
+    walkingTrend === 'up'
+      ? { icon: 'trending-up' as const, color: colors.success, label: 'Walking more than last week' }
+      : walkingTrend === 'down'
+      ? { icon: 'trending-down' as const, color: colors.warning, label: 'Walking less than last week' }
+      : { icon: 'remove' as const, color: colors.textSecondary, label: 'About the same as last week' };
+  // Greet by the first name given in onboarding, not the login handle.
+  const name = (fullName || '').trim().split(/\s+/)[0] || username || 'there';
 
   if (isLoading) {
     return (
@@ -671,207 +691,107 @@ export default function Home() {
       <ScrollView
         showsVerticalScrollIndicator={false}
         refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.textTertiary}
-          />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.textTertiary} />
         }
         contentContainerStyle={styles.scrollContent}
       >
-        {/* ── INK HERO HEADER ─────────────────────────────── */}
-        <View style={styles.heroHeader}>
-          <View style={styles.heroNoiseOverlay} pointerEvents="none" />
-          <View style={styles.heroAccentGlow} pointerEvents="none" />
-
-          <View style={styles.headerTop}>
-            <View>
-              <Text style={styles.greetingText}>{getGreeting().toUpperCase()}</Text>
-              <Text style={styles.usernameText}>{username || 'User'}</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.profileBtn}
-              onPress={() => router.push('/(tabs)/profile')}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="person-outline" size={18} color={colors.textInverse} />
-            </TouchableOpacity>
+        {/* ── Greeting ───────────────────────────────────── */}
+        <View style={styles.header}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.greeting}>{getGreeting()},</Text>
+            <Text style={styles.name} numberOfLines={1} accessibilityRole="header">
+              {name}
+            </Text>
           </View>
-
-          <View style={styles.heroRule} />
-
-          {/* Step ring + meta */}
-          <View style={styles.stepProgressContainer}>
-            <StepCircle steps={todaySteps} goal={stepGoal} />
-            <View style={styles.stepInfoContainer}>
-              <View style={styles.stepInfoRow}>
-                <Text style={styles.stepInfoKey}>Daily target</Text>
-                <Text style={styles.stepInfoValue}>{stepGoal.toLocaleString()}</Text>
-              </View>
-              <View style={styles.stepInfoDivider} />
-              <View style={styles.stepInfoRow}>
-                <Text style={styles.stepInfoKey}>This week</Text>
-                <Text style={styles.stepInfoValue}>{goalsReached} / 7</Text>
-              </View>
-              <View style={styles.stepInfoDivider} />
-              <WeekCalendar weekData={weekSteps} />
-            </View>
-          </View>
+          <Pressable
+            onPress={() => router.push('/(tabs)/profile')}
+            style={({ pressed }) => [styles.avatar, pressed && styles.pressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Open profile"
+          >
+            <Text style={styles.avatarText}>{name.charAt(0).toUpperCase()}</Text>
+          </Pressable>
         </View>
 
-        {/* ── QUICK ACTIONS ────────────────────────────────── */}
-        <View style={styles.quickActionsContainer}>
-          <TouchableOpacity
-            style={styles.quickActionCard}
+        {/* ── Today hero ─────────────────────────────────── */}
+        <View style={styles.hero}>
+          <View style={styles.heroHead}>
+            <Text style={styles.heroTitle}>Today’s walk</Text>
+            <Text style={styles.heroMeta}>
+              {goalsReached} of 7 days on target
+            </Text>
+          </View>
+          <Sunrise steps={todaySteps} goal={stepGoal} />
+          <WeekStrip weekData={weekSteps} />
+        </View>
+
+        {/* ── Quick actions ──────────────────────────────── */}
+        <View style={styles.tiles}>
+          <Tile
+            icon="chatbubble-ellipses-outline"
+            title="Ask Eunoia"
+            detail="Questions about your health or medicines"
             onPress={() => router.push('/(tabs)/chat')}
-            activeOpacity={0.85}
-          >
-            <View style={styles.quickActionTop}>
-              <View style={styles.quickActionIcon}>
-                <Ionicons name="sparkles" size={18} color={colors.textPrimary} />
-              </View>
-              <Ionicons name="arrow-forward" size={16} color={colors.textTertiary} />
-            </View>
-            <View>
-              <Text style={styles.quickActionTitle}>Health AI</Text>
-              <Text style={styles.quickActionSubtitle}>Chat with your assistant</Text>
-            </View>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.quickActionCard}
+          />
+          <Tile
+            icon="leaf-outline"
+            title="Meditate"
+            detail={totalMeditationMin > 0 ? `${totalMeditationMin} min this week` : 'Start a short session'}
             onPress={() => setShowMeditation(true)}
-            activeOpacity={0.85}
-          >
-            <View style={styles.quickActionTop}>
-              <View style={styles.quickActionIcon}>
-                <Ionicons name="leaf-outline" size={18} color={colors.textPrimary} />
-              </View>
-              <Ionicons name="arrow-forward" size={16} color={colors.textTertiary} />
-            </View>
-            <View>
-              <Text style={styles.quickActionTitle}>Meditate</Text>
-              <Text style={styles.quickActionSubtitle}>{totalMeditationMin} min this week</Text>
-            </View>
-          </TouchableOpacity>
+          />
         </View>
 
-        {/* ── COST ESTIMATOR ENTRY ─────────────────────────── */}
-        <TouchableOpacity
-          style={costEstimatorStyles.card}
-          onPress={() => router.push('/cost-estimator' as any)}
-          activeOpacity={0.9}
-          accessibilityRole="button"
-          accessibilityLabel="Open medical cost estimator"
-        >
-          <View style={costEstimatorStyles.left}>
-            <View style={costEstimatorStyles.iconBg}>
-              <Ionicons name="calculator-outline" size={18} color={colors.textPrimary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={costEstimatorStyles.title}>Medical cost estimator</Text>
-              <Text style={costEstimatorStyles.subtitle}>
-                Approximate ranges by city, condition, and hospital tier
-              </Text>
-            </View>
-          </View>
-          <Ionicons name="arrow-forward" size={16} color={colors.textTertiary} />
-        </TouchableOpacity>
-
-        {/* ── PROFILE COMPLETENESS ──────────────────────────── */}
-        {/* Where the rest of the profile gets asked for: one item at a time,
-            ordered by how much it would actually improve the assessment.
-            Hides itself once there is nothing worth asking. */}
-        <View style={styles.completenessWrap}>
-          <CompletenessCard completeness={profileData?.completeness} />
-        </View>
-
-        {/* ── RISK SCORE ────────────────────────────────────── */}
-        <RiskScoreCard
+        {/* ── Wellness ───────────────────────────────────── */}
+        <WellnessCard
           report={latestReport}
           onPress={() => {
             if (latestReport) {
-              router.push({
-                pathname: '/risk-detail' as any,
-                params: { id: String(latestReport.report_id) },
-              });
+              router.push({ pathname: '/risk-detail' as any, params: { id: String(latestReport.report_id) } });
             } else {
               router.push('/onboarding/welcome' as any);
             }
           }}
         />
 
-        {/* ── HEALTH INSIGHTS ──────────────────────────────── */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionHeaderLeft}>
-              <Text style={styles.sectionEyebrow}>02</Text>
-              <Text style={styles.sectionTitle}>Health Insights</Text>
-            </View>
-            <View style={styles.sectionBadge}>
-              <View style={styles.sectionBadgeDot} />
-              <Text style={styles.sectionBadgeText}>AI</Text>
-            </View>
-          </View>
+        {/* Asks for the rest of the profile one item at a time; hides itself when done. */}
+        <View style={styles.gap}>
+          <CompletenessCard completeness={profileData?.completeness} />
+        </View>
 
-          <View style={styles.insightCard}>
-            <View style={styles.insightIconContainer}>
-              <Ionicons name={trendIcon as any} size={20} color={trendColor} />
+        {/* ── This week ──────────────────────────────────── */}
+        <View style={styles.card}>
+          <View style={styles.cardHead}>
+            <Text style={styles.cardTitle}>This week</Text>
+            <Text style={styles.cardMeta}>{totalWeekSteps.toLocaleString()} steps</Text>
+          </View>
+          <ActivityChart weekData={weekSteps} meditationData={meditationWeek} />
+          <View style={styles.insight}>
+            <View style={styles.insightHead}>
+              <Ionicons name={trend.icon} size={18} color={trend.color} />
+              <Text style={styles.insightTitle}>{trend.label}</Text>
             </View>
-            <View style={styles.insightContent}>
-              <Text style={styles.insightOverline}>Walking Analysis</Text>
-              <Text style={styles.insightText} numberOfLines={4}>
-                {walkingAnalysis || 'Start tracking your steps to receive personalized insights.'}
-              </Text>
-            </View>
+            <Text style={styles.insightText}>
+              {walkingAnalysis || 'Walk with your phone for a day or two and a summary of your pattern will appear here.'}
+            </Text>
           </View>
         </View>
 
-        {/* ── WEEKLY ACTIVITY ──────────────────────────────── */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionHeaderLeft}>
-              <Text style={styles.sectionEyebrow}>03</Text>
-              <Text style={styles.sectionTitle}>Weekly Activity</Text>
-            </View>
-            <Text style={styles.sectionMeta}>{(totalWeekSteps / 1000).toFixed(1)}k</Text>
+        {/* ── Cost estimator ─────────────────────────────── */}
+        <Pressable
+          style={({ pressed }) => [styles.card, styles.rowCard, pressed && styles.pressed]}
+          onPress={() => router.push('/cost-estimator' as any)}
+          accessibilityRole="button"
+          accessibilityLabel="Estimate treatment costs"
+        >
+          <View style={styles.rowIcon}>
+            <Ionicons name="wallet-outline" size={20} color={colors.textPrimary} />
           </View>
-          <ActivityBarChart weekData={weekSteps} meditationData={meditationWeek} />
-        </View>
-
-        {/* ── STATS GRID ───────────────────────────────────── */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionHeaderLeft}>
-              <Text style={styles.sectionEyebrow}>04</Text>
-              <Text style={styles.sectionTitle}>Vitals</Text>
-            </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.cardTitleSmall}>Estimate treatment costs</Text>
+            <Text style={styles.cardBody}>Typical price ranges at hospitals near you</Text>
           </View>
-          <View style={styles.statsGrid}>
-            <View style={styles.statCard}>
-              <Text style={styles.statLabel}>GOALS HIT</Text>
-              <Text style={styles.statValue}>{goalsReached}</Text>
-              <Text style={styles.statUnit}>this week</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statLabel}>MINDFUL</Text>
-              <Text style={styles.statValue}>{totalMeditationMin}</Text>
-              <Text style={styles.statUnit}>minutes</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statLabel}>STEPS</Text>
-              <Text style={styles.statValue}>
-                {Math.round(totalWeekSteps / 1000)}<Text style={styles.statValueUnit}>k</Text>
-              </Text>
-              <Text style={styles.statUnit}>weekly</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.footerMark}>
-          <View style={styles.footerDot} />
-          <Text style={styles.footerText}>EUNOIA</Text>
-        </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+        </Pressable>
       </ScrollView>
 
       <MeditationModal
@@ -882,10 +802,6 @@ export default function Home() {
     </SafeAreaView>
   );
 }
-
-// ═══════════════════════════════════════════════════════════════
-// ─── Styles ─────────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════
 
 const styles = StyleSheet.create({
   container: {
@@ -898,675 +814,283 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  completenessWrap: {
-    paddingHorizontal: spacing.screenPadding,
-    marginTop: spacing.xxl,
-  },
-
   scrollContent: {
-    paddingBottom: 140,
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xxxl,
+  },
+  pressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
+  },
+  gap: {
+    marginBottom: spacing.md,
   },
 
-  // ─── Hero (ink surface) ───────────────────────────────────
-  heroHeader: {
-    backgroundColor: colors.inkSurface,
-    paddingTop: spacing.lg,
-    paddingBottom: 56,
-    paddingHorizontal: spacing.screenPadding,
-    borderBottomLeftRadius: 28,
-    borderBottomRightRadius: 28,
-    overflow: 'hidden',
-    position: 'relative',
+  // Greeting
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: spacing.xl,
   },
-  heroNoiseOverlay: {
+  greeting: {
+    ...typography.body,
+    color: colors.textSecondary,
+  },
+  name: {
+    ...typography.largeTitle,
+    color: colors.textPrimary,
+  },
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: {
+    fontFamily: fonts.display,
+    fontSize: 18,
+    color: colors.textPrimary,
+  },
+
+  // Hero
+  hero: {
+    backgroundColor: colors.inkSurface,
+    borderRadius: spacing.cardRadiusXl,
+    paddingTop: spacing.xl,
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  heroHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginBottom: spacing.xl,
+  },
+  heroTitle: {
+    ...typography.headline,
+    color: colors.textInverse,
+  },
+  heroMeta: {
+    ...typography.caption,
+    color: colors.textInverseMuted,
+  },
+  sunrise: {
+    alignItems: 'center',
+  },
+  sunriseCenter: {
     position: 'absolute',
-    top: 0,
+    bottom: -4,
     left: 0,
     right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255,255,255,0.02)',
-  },
-  heroAccentGlow: {
-    position: 'absolute',
-    top: -120,
-    right: -80,
-    width: 280,
-    height: 280,
-    borderRadius: 140,
-    backgroundColor: colors.accent,
-    opacity: 0.18,
-  },
-  headerTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: spacing.lg,
-  },
-  greetingText: {
-    ...typography.overline,
-    color: colors.textInverseSubtle,
-  },
-  usernameText: {
-    ...typography.largeTitle,
-    color: colors.textInverse,
-    marginTop: 6,
-  },
-  profileBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1,
-    borderColor: colors.inkBorderStrong,
     alignItems: 'center',
-    justifyContent: 'center',
   },
-  heroRule: {
-    height: 1,
-    backgroundColor: colors.inkBorder,
-    marginVertical: spacing.lg,
-  },
-
-  // ─── Step Progress ───────────────────────────────────────
-  stepProgressContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xl,
-    marginTop: spacing.sm,
-  },
-  stepCircleContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 156,
-    height: 156,
-  },
-  stepCountText: {
-    ...typography.numericLarge,
-    fontSize: 36,
+  stepCount: {
+    ...typography.mega,
     color: colors.textInverse,
   },
-  stepLabel: {
-    ...typography.overline,
-    fontSize: 10,
-    color: colors.textInverseSubtle,
-    marginTop: 4,
-  },
-  stepInfoContainer: {
-    flex: 1,
-    gap: spacing.sm,
-  },
-  stepInfoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  stepInfoKey: {
+  stepGoal: {
     ...typography.caption,
-    color: colors.textInverseSubtle,
+    color: colors.textInverseMuted,
+    marginTop: 2,
   },
-  stepInfoValue: {
-    ...typography.bodyMedium,
-    fontWeight: '700',
-    color: colors.textInverse,
-  },
-  stepInfoDivider: {
-    height: 1,
-    backgroundColor: colors.inkBorder,
-    marginVertical: 2,
-  },
-
-  // Week Calendar
-  weekContainer: {
+  weekStrip: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 4,
+    marginTop: spacing.xxl,
+    paddingTop: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: colors.inkBorder,
   },
-  weekDayCol: {
+  weekDay: {
     alignItems: 'center',
     gap: 6,
-    flex: 1,
+    minWidth: 32,
   },
-  weekDayLabel: {
-    ...typography.overline,
-    fontSize: 9,
-    color: colors.textInverseSubtle,
-  },
-  weekDayLabelActive: {
-    color: colors.textInverse,
-  },
-  weekDot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+  weekMark: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
   },
-  weekDotPartial: {
-    backgroundColor: 'rgba(255,255,255,0.30)',
-    borderColor: 'rgba(255,255,255,0.30)',
+  weekMarkWalked: {
+    borderColor: 'rgba(244,167,34,0.7)',
   },
-  weekDotSuccess: {
-    backgroundColor: colors.textInverse,
-    borderColor: colors.textInverse,
-  },
-  weekDotToday: {
+  weekMarkReached: {
     backgroundColor: colors.accent,
     borderColor: colors.accent,
   },
-  weekDotInner: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: colors.textInverse,
+  weekMarkToday: {
+    borderColor: colors.textInverse,
+    borderWidth: 2,
+  },
+  weekLabel: {
+    ...typography.captionSmall,
+    color: colors.textInverseSubtle,
+  },
+  weekLabelToday: {
+    fontFamily: fonts.bold,
+    color: colors.textInverse,
   },
 
-  // ─── Quick Actions ───────────────────────────────────────
-  quickActionsContainer: {
+  // Tiles
+  tiles: {
     flexDirection: 'row',
     gap: spacing.md,
-    paddingHorizontal: spacing.screenPadding,
-    marginTop: -28,
-    alignItems: 'stretch',
+    marginBottom: spacing.md,
   },
-  quickActionCard: {
+  tile: {
     flex: 1,
-    minHeight: 120,
+    backgroundColor: colors.surface,
     borderRadius: spacing.cardRadiusLg,
     padding: spacing.lg,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    justifyContent: 'space-between',
-    ...shadows.lg,
   },
-  quickActionTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  quickActionIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: colors.backgroundTertiary,
+  tileIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.accentSoft,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
   },
-  quickActionTitle: {
+  tileTitle: {
     ...typography.headline,
     color: colors.textPrimary,
+    marginTop: spacing.xl,
   },
-  quickActionSubtitle: {
+  tileDetail: {
     ...typography.caption,
-    color: colors.textTertiary,
+    color: colors.textSecondary,
     marginTop: 2,
   },
 
-  // ─── Sections ────────────────────────────────────────────
-  section: {
-    paddingHorizontal: spacing.screenPadding,
-    marginTop: 40,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.lg,
-  },
-  sectionHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: spacing.md,
-  },
-  sectionEyebrow: {
-    ...typography.overline,
-    color: colors.textMuted,
-    fontVariant: ['tabular-nums'],
-  },
-  sectionTitle: {
-    ...typography.title,
-    color: colors.textPrimary,
-  },
-  sectionMeta: {
-    ...typography.caption,
-    color: colors.textTertiary,
-    fontVariant: ['tabular-nums'],
-  },
-  sectionBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: spacing.chipRadius,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  sectionBadgeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.accent,
-  },
-  sectionBadgeText: {
-    ...typography.overline,
-    fontSize: 10,
-    color: colors.textPrimary,
-  },
-
-  // ─── Insight Card ────────────────────────────────────────
-  insightCard: {
-    flexDirection: 'row',
+  // Cards
+  card: {
     backgroundColor: colors.surface,
     borderRadius: spacing.cardRadiusLg,
     padding: spacing.xl,
-    gap: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    ...shadows.sm,
+    marginBottom: spacing.md,
   },
-  insightIconContainer: {
+  cardHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.lg,
+  },
+  cardHeadRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  cardTitle: {
+    ...typography.title,
+    color: colors.textPrimary,
+  },
+  cardTitleSmall: {
+    ...typography.headline,
+    color: colors.textPrimary,
+  },
+  cardMeta: {
+    ...typography.caption,
+    color: colors.textTertiary,
+  },
+  cardBody: {
+    ...typography.callout,
+    fontFamily: fonts.regular,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  emptyCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.lg,
+  },
+  emptyIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.lg,
+    paddingVertical: spacing.lg,
+  },
+  rowIcon: {
     width: 44,
     height: 44,
-    borderRadius: 12,
-    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 22,
+    backgroundColor: colors.selected,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  insightContent: {
-    flex: 1,
-  },
-  insightOverline: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: 6,
-  },
-  insightText: {
-    ...typography.body,
-    color: colors.textPrimary,
   },
 
-  // ─── Chart ───────────────────────────────────────────────
-  chartContainer: {
-    backgroundColor: colors.surface,
-    borderRadius: spacing.cardRadiusLg,
-    padding: spacing.xl,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    ...shadows.sm,
-  },
-  chartBars: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    height: 120,
-    marginBottom: spacing.md,
-  },
-  chartBarGroup: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  barPair: {
+  // Wellness
+  scoreRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
+    gap: spacing.lg,
+    marginBottom: spacing.xl,
   },
-  bar: {
-    width: 10,
-    borderRadius: 3,
-  },
-  barFilled: {
-    backgroundColor: colors.textPrimary,
-  },
-  barToday: {
-    backgroundColor: colors.neutral.mist,
-  },
-  barPartial: {
-    backgroundColor: colors.neutral.mist,
-  },
-  barEmpty: {
-    backgroundColor: colors.neutral.cloud,
-  },
-  barMeditation: {
-    backgroundColor: colors.accent,
-  },
-  chartBarLabel: {
-    ...typography.overline,
-    fontSize: 10,
-    color: colors.textMuted,
-    marginTop: 12,
-  },
-  chartBarLabelActive: {
+  scoreValue: {
+    ...typography.mega,
+    fontSize: 72,
+    lineHeight: 74,
     color: colors.textPrimary,
   },
-  chartLegend: {
-    flexDirection: 'row',
-    justifyContent: 'flex-start',
-    gap: spacing.lg,
-    paddingTop: spacing.md,
-    marginTop: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.divider,
+  scoreSide: {
+    paddingBottom: 10,
+    gap: spacing.sm,
+    alignItems: 'flex-start',
   },
-  legendItem: {
+  scoreOutOf: {
+    ...typography.callout,
+    color: colors.textTertiary,
+  },
+  riskChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-  },
-  legendDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  legendText: {
-    ...typography.captionSmall,
-    color: colors.textTertiary,
-  },
-
-  // ─── Stats Grid ──────────────────────────────────────────
-  statsGrid: {
-    flexDirection: 'row',
-    gap: spacing.md,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: colors.surface,
-    borderRadius: spacing.cardRadiusLg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    minHeight: 110,
-    justifyContent: 'space-between',
-  },
-  statLabel: {
-    ...typography.overline,
-    fontSize: 10,
-    color: colors.textMuted,
-  },
-  statValue: {
-    ...typography.numeric,
-    color: colors.textPrimary,
-    marginTop: 8,
-  },
-  statValueUnit: {
-    ...typography.numeric,
-    color: colors.textTertiary,
-  },
-  statUnit: {
-    ...typography.caption,
-    color: colors.textTertiary,
-    marginTop: 2,
-  },
-
-  // ─── Footer mark ─────────────────────────────────────────
-  footerMark: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginTop: 56,
-  },
-  footerDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.accent,
-  },
-  footerText: {
-    ...typography.overline,
-    fontSize: 10,
-    color: colors.textMuted,
-  },
-
-  // ─── Modal ───────────────────────────────────────────────
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: colors.overlay,
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: colors.background,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: spacing.xxl,
-    paddingBottom: 48,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  modalHandle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.dividerStrong,
-    alignSelf: 'center',
-    marginBottom: spacing.lg,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  modalEyebrow: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: 4,
-  },
-  modalTitle: {
-    ...typography.title,
-    color: colors.textPrimary,
-  },
-  modalCloseBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: colors.backgroundSecondary,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  timerText: {
-    ...typography.display,
-    fontSize: 56,
-    color: colors.textPrimary,
-    fontVariant: ['tabular-nums'],
-  },
-  timerLabel: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginTop: 6,
-  },
-  presetRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    flexWrap: 'wrap',
-  },
-  presetChip: {
-    paddingHorizontal: 18,
-    paddingVertical: 10,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
     borderRadius: spacing.chipRadius,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
   },
-  presetChipActive: {
-    backgroundColor: colors.inkSurface,
-    borderColor: colors.inkSurface,
+  riskDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
   },
-  presetChipText: {
-    ...typography.callout,
-    fontWeight: '600',
-    color: colors.textSecondary,
-  },
-  presetChipTextActive: {
-    color: colors.textInverse,
-  },
-  meditationStartBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 32,
-    paddingVertical: 14,
-    borderRadius: spacing.buttonRadius,
-    backgroundColor: colors.inkSurface,
-    ...shadows.md,
-  },
-  meditationStopBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 32,
-    paddingVertical: 14,
-    borderRadius: spacing.buttonRadius,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  meditationStartBtnText: {
-    ...typography.headline,
-    color: colors.textInverse,
-  },
-  meditationStopBtnText: {
-    ...typography.headline,
-    color: colors.textPrimary,
-  },
-  completedIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: colors.inkSurface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.md,
-  },
-  completedText: {
-    ...typography.headline,
-    color: colors.textPrimary,
-  },
-});
-
-// ═══════════════════════════════════════════════════════════════
-// ─── Risk Score Card Styles ─────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════
-
-const riskCardStyles = StyleSheet.create({
-  section: {
-    paddingHorizontal: spacing.screenPadding,
-    marginTop: 40,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.lg,
-  },
-  sectionHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: spacing.md,
-  },
-  sectionEyebrow: {
-    ...typography.overline,
-    color: colors.textMuted,
-    fontVariant: ['tabular-nums'],
-  },
-  sectionTitle: {
-    ...typography.title,
-    color: colors.textPrimary,
-  },
-  sectionMeta: {
+  riskChipText: {
     ...typography.caption,
-    color: colors.textTertiary,
-    fontVariant: ['tabular-nums'],
+    fontFamily: fonts.semibold,
   },
-
-  card: {
-    flexDirection: 'row',
-    backgroundColor: colors.surface,
-    borderRadius: spacing.cardRadiusLg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    padding: spacing.xl,
-    gap: spacing.xl,
-    ...shadows.sm,
-  },
-  cardLeft: {
-    flex: 1.1,
-    justifyContent: 'space-between',
-  },
-  cardRight: {
-    flex: 1,
-    justifyContent: 'space-between',
-    gap: spacing.md,
-  },
-
-  scoreLabel: {
-    ...typography.overline,
-    fontSize: 10,
-    color: colors.textMuted,
-    marginBottom: 6,
-  },
-  scoreRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 4,
-  },
-  scoreValue: {
-    ...typography.numericLarge,
-    color: colors.textPrimary,
-  },
-  scoreSuffix: {
-    ...typography.callout,
-    color: colors.textTertiary,
-  },
-
-  riskSummary: {
-    alignSelf: 'flex-start',
-    minWidth: 112,
-    borderLeftWidth: 3,
-    borderRadius: spacing.inputRadius,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    marginTop: spacing.md,
-  },
-  riskSummaryLabel: {
-    ...typography.captionSmall,
-    color: colors.textTertiary,
-    fontSize: 10,
-    lineHeight: 13,
-  },
-  riskSummaryValue: {
-    ...typography.headline,
-    marginTop: 1,
-  },
-
-  confidenceWrap: {
-    marginTop: spacing.sm,
-  },
-
   miniBars: {
-    gap: 8,
+    gap: spacing.md,
   },
   miniBarRow: {
-    gap: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
   },
   miniBarLabel: {
-    ...typography.captionSmall,
-    color: colors.textTertiary,
-    textTransform: 'capitalize',
+    ...typography.caption,
+    color: colors.textSecondary,
+    width: 128,
   },
   miniBarTrack: {
+    flex: 1,
     height: 6,
     borderRadius: 3,
-    backgroundColor: colors.skeleton,
+    backgroundColor: colors.backgroundTertiary,
     overflow: 'hidden',
   },
   miniBarFill: {
@@ -1574,88 +1098,180 @@ const riskCardStyles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: colors.textPrimary,
   },
+  confidence: {
+    marginTop: spacing.lg,
+    alignItems: 'flex-start',
+  },
 
-  cardCta: {
+  // Chart
+  chartBars: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  chartCol: {
+    flex: 1,
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  chartPlot: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 3,
+  },
+  bar: {
+    width: 14,
+    borderRadius: 7,
+  },
+  barSteps: {
+    backgroundColor: colors.textPrimary,
+  },
+  barReached: {
+    backgroundColor: colors.accent,
+  },
+  barEmpty: {
+    backgroundColor: colors.backgroundTertiary,
+  },
+  barMed: {
+    width: 5,
+    borderRadius: 3,
+    backgroundColor: colors.textMuted,
+  },
+  chartLabel: {
+    ...typography.captionSmall,
+    color: colors.textTertiary,
+  },
+  chartLabelToday: {
+    fontFamily: fonts.bold,
+    color: colors.textPrimary,
+  },
+  legend: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.lg,
+    marginTop: spacing.lg,
+  },
+  legendItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    alignSelf: 'flex-end',
   },
-  cardCtaText: {
-    ...typography.caption,
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendText: {
+    ...typography.captionSmall,
+    color: colors.textSecondary,
+  },
+  insight: {
+    marginTop: spacing.xl,
+    paddingTop: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+  },
+  insightHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  insightTitle: {
+    ...typography.callout,
+    fontFamily: fonts.semibold,
     color: colors.textPrimary,
-    fontWeight: '600',
+  },
+  insightText: {
+    ...typography.callout,
+    fontFamily: fonts.regular,
+    lineHeight: 21,
+    color: colors.textSecondary,
   },
 
-  emptyState: {
+  // Meditation sheet
+  modalOverlay: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.lg,
+    backgroundColor: colors.overlay,
+    justifyContent: 'flex-end',
   },
-  emptyIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: colors.backgroundSecondary,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emptyTitle: {
-    ...typography.headline,
-    color: colors.textPrimary,
-  },
-  emptyBody: {
-    ...typography.caption,
-    color: colors.textTertiary,
-    marginTop: 2,
-  },
-});
-
-// ═══════════════════════════════════════════════════════════════
-// ─── Cost Estimator entry card ─────────────────────────────────
-// ═══════════════════════════════════════════════════════════════
-
-const costEstimatorStyles = StyleSheet.create({
-  card: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.lg,
-    marginHorizontal: spacing.screenPadding,
-    marginTop: spacing.md,
-    paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.lg,
-    borderRadius: spacing.cardRadiusLg,
+  sheet: {
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    ...shadows.sm,
+    borderTopLeftRadius: spacing.cardRadiusXl,
+    borderTopRightRadius: spacing.cardRadiusXl,
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xxxl,
+    ...shadows.xl,
   },
-  left: {
-    flex: 1,
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.surfaceBorderStrong,
+    marginBottom: spacing.lg,
+  },
+  sheetHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: spacing.md,
   },
-  iconBg: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: colors.backgroundTertiary,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+  sheetTitle: {
+    ...typography.largeTitle,
+    color: colors.textPrimary,
+  },
+  sheetSubtitle: {
+    ...typography.callout,
+    fontFamily: fonts.regular,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  timerWrap: {
     alignItems: 'center',
     justifyContent: 'center',
+    marginVertical: spacing.xxl,
   },
-  title: {
+  timerCenter: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  timerText: {
+    ...typography.mega,
+    color: colors.textPrimary,
+    fontVariant: ['tabular-nums'],
+  },
+  timerLabel: {
+    ...typography.callout,
+    color: colors.textTertiary,
+  },
+  timerDone: {
     ...typography.headline,
     color: colors.textPrimary,
   },
-  subtitle: {
+  presetRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.xl,
+  },
+  preset: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 12,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  presetActive: {
+    backgroundColor: colors.inkSurface,
+  },
+  presetText: {
     ...typography.caption,
-    color: colors.textTertiary,
-    marginTop: 2,
+    fontFamily: fonts.semibold,
+    color: colors.textSecondary,
+  },
+  presetTextActive: {
+    color: colors.textInverse,
   },
 });

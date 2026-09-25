@@ -1,26 +1,22 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { AccessibilityInfo, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import Animated, {
   Easing,
+  cancelAnimation,
   useAnimatedStyle,
   useSharedValue,
+  withDelay,
   withRepeat,
   withTiming,
-  cancelAnimation,
 } from 'react-native-reanimated';
 import axios from 'axios';
 
 import ProgressMessages from '../../components/onboarding/ProgressMessages';
+import { Button, Notice } from '../../components/ui';
 import { ONBOARDING_COPY } from '../../constants/onboarding';
-import { colors, shadows, spacing, typography } from '../../constants/theme';
+import { colors, spacing, typography } from '../../constants/theme';
 import { useAuth } from '../../contexts/AuthContext';
 import { routeForStepId } from '../../utils/onboardingFlow';
 import { buildAnalyzePayload, isSubmittable } from '../../utils/onboardingPayload';
@@ -38,8 +34,10 @@ const MIN_VISIBLE_MS = 2000;
 /** When the request has not resolved within this window, swap to the
  *  recoverable error state (Requirement 8.5). */
 const ERROR_TIMEOUT_MS = 30000;
-/** One full revolution of the soft accent dot. */
-const DOT_ROTATION_DURATION_MS = 1500;
+/** The sun rising over the horizon on mount. */
+const SUN_RISE_MS = 1400;
+/** One half of the sun's slow breathing cycle once risen. */
+const SUN_BREATH_MS = 2400;
 
 /**
  * Maps a 400's `loc[1]` payload field to the step that owns it.
@@ -74,17 +72,18 @@ type PendingAction = 'idle' | 'retrying' | 'cancelling';
  *  - 8.5: After 30 s with no response, swaps the message stack for a
  *    recoverable error state with Retry and Cancel buttons.
  *  - 8.6: While either Retry or Cancel is processing, both buttons
- *    are disabled and an `ActivityIndicator` replaces the pressed
- *    button's label until the action resolves.
- *  - 8.8: Monochrome neutrals plus the single accent dot only.
+ *    are disabled and the pressed button shows its spinner until the
+ *    action resolves.
+ *  - 8.8: Neutrals plus a single marigold accent: the rising sun,
+ *    which holds still when the OS asks for reduced motion.
  *  - 18.1, 18.4: A network error or 500 surfaces the same recoverable
  *    error state.
  *  - 18.2: A 401 from `analyze-risk` redirects to `/auth/login` while
  *    preserving the draft.
  *  - 18.3: A 400 with `loc = ['body', <step_field>, ...]` routes the
  *    user back to the step that owns the field.
- *  - 18.5: Buttons render with `error`/`errorSoft` tokens only — no
- *    new colors are introduced.
+ *  - 18.5: The error message uses the shared `Notice` (error tokens);
+ *    actions use the shared `Button`. No new colors are introduced.
  */
 export default function Analyzing() {
   const { token } = useAuth();
@@ -105,28 +104,6 @@ export default function Analyzing() {
   const generationRef = useRef<number>(0);
   const isMountedRef = useRef<boolean>(true);
   const hasNavigatedRef = useRef<boolean>(false);
-
-  // ── Rotating accent dot (Requirement 8.8) ─────────────────────
-  // A single soft accent dot rotates continuously via reanimated's
-  // `withRepeat`. The dot is the only element in the entire screen
-  // that uses `colors.accent`; everything else is monochrome neutrals.
-  const rotation = useSharedValue(0);
-  useEffect(() => {
-    rotation.value = withRepeat(
-      withTiming(360, {
-        duration: DOT_ROTATION_DURATION_MS,
-        easing: Easing.linear,
-      }),
-      -1,
-      false,
-    );
-    return () => {
-      cancelAnimation(rotation);
-    };
-  }, [rotation]);
-  const dotAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${rotation.value}deg` }],
-  }));
 
   // ── Timer helpers ─────────────────────────────────────────────
   const clearErrorTimer = useCallback(() => {
@@ -332,15 +309,11 @@ export default function Analyzing() {
     router.replace(routeForStepId('location') as never);
   }, [clearErrorTimer, clearMinVisibleTimer, goTo, pendingAction]);
 
-  const buttonsDisabled = pendingAction !== 'idle';
-
   // ── Render ────────────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
       <View style={styles.content}>
-        <Text style={styles.brand} accessibilityRole="text">
-          {ONBOARDING_COPY.analyzing.eyebrow}
-        </Text>
+        <RisingSun animate={mode === 'loading'} />
 
         {mode === 'loading' ? (
           <>
@@ -348,17 +321,11 @@ export default function Analyzing() {
               {ONBOARDING_COPY.analyzing.headline}
             </Text>
             <Text style={styles.subtitle}>
-              {ONBOARDING_COPY.analyzing.subtitle}
+              This takes a few seconds. Keep the app open while we work.
             </Text>
 
             <View style={styles.messagesBlock}>
               <ProgressMessages />
-            </View>
-
-            <View style={styles.dotWrapper} accessibilityElementsHidden>
-              <Animated.View style={[styles.dotRotor, dotAnimatedStyle]}>
-                <View style={styles.dot} />
-              </Animated.View>
             </View>
           </>
         ) : (
@@ -366,54 +333,22 @@ export default function Analyzing() {
             <Text style={styles.errorHeadline} accessibilityRole="header">
               {ONBOARDING_COPY.analyzing.error.headline}
             </Text>
-            <Text style={styles.errorSubtitle}>
-              {ONBOARDING_COPY.analyzing.error.subtitle}
-            </Text>
+            <Notice tone="error">{ONBOARDING_COPY.analyzing.error.subtitle}</Notice>
 
             <View style={styles.errorActions}>
-              <TouchableOpacity
-                style={[
-                  styles.errorButton,
-                  styles.errorButtonPrimary,
-                  buttonsDisabled && styles.buttonDisabled,
-                ]}
+              <Button
+                label="Try again"
                 onPress={handleRetry}
-                disabled={buttonsDisabled}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel={ONBOARDING_COPY.analyzing.error.retryLabel}
-                accessibilityState={{ disabled: buttonsDisabled }}
-              >
-                {pendingAction === 'retrying' ? (
-                  <ActivityIndicator size="small" color={colors.error} />
-                ) : (
-                  <Text style={styles.errorButtonPrimaryText}>
-                    {ONBOARDING_COPY.analyzing.error.retryLabel}
-                  </Text>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.errorButton,
-                  styles.errorButtonSecondary,
-                  buttonsDisabled && styles.buttonDisabled,
-                ]}
+                loading={pendingAction === 'retrying'}
+                disabled={pendingAction === 'cancelling'}
+              />
+              <Button
+                label="Back to your answers"
+                variant="secondary"
                 onPress={handleCancel}
-                disabled={buttonsDisabled}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel={ONBOARDING_COPY.analyzing.error.cancelLabel}
-                accessibilityState={{ disabled: buttonsDisabled }}
-              >
-                {pendingAction === 'cancelling' ? (
-                  <ActivityIndicator size="small" color={colors.error} />
-                ) : (
-                  <Text style={styles.errorButtonSecondaryText}>
-                    {ONBOARDING_COPY.analyzing.error.cancelLabel}
-                  </Text>
-                )}
-              </TouchableOpacity>
+                loading={pendingAction === 'cancelling'}
+                disabled={pendingAction === 'retrying'}
+              />
             </View>
           </View>
         )}
@@ -422,15 +357,83 @@ export default function Analyzing() {
   );
 }
 
-// ──────────────────────────────────────────────────────────────────
-// Styles — only tokens from `frontend/constants/theme.ts`. The
-// rotating dot uses `colors.accent` (single accent allowed by
-// Requirement 8.8); error buttons stay within the existing `error`
-// and `errorSoft` tokens (Requirement 18.5).
-// ──────────────────────────────────────────────────────────────────
+// ── Rising sun ────────────────────────────────────────────────────
+// The brand mark at hero size: a marigold sun rises over the indigo
+// horizon, then breathes slowly while we wait. Proportions follow
+// `BrandMark` (sun centre at 21/32, radius 8.5/32, horizon bar 23/32).
+// With reduced motion the sun is simply shown risen and still.
 
-const DOT_DIAMETER = 12;
-const DOT_ROTOR_DIAMETER = 56;
+const TILE = 168;
+const SCALE = TILE / 32;
+const HORIZON_Y = 21 * SCALE;
+const SUN_D = 17 * SCALE;
+const SUN_LEFT = (TILE - SUN_D) / 2;
+const SUN_TOP = HORIZON_Y - SUN_D / 2;
+
+function RisingSun({ animate }: { animate: boolean }) {
+  // 1 = below the horizon, 0 = risen.
+  const rise = useSharedValue(animate ? 1 : 0);
+  const breath = useSharedValue(0);
+
+  useEffect(() => {
+    if (!animate) {
+      rise.value = 0;
+      breath.value = 0;
+      return;
+    }
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .catch(() => false)
+      .then((reduce) => {
+        if (!alive) return;
+        if (reduce) {
+          rise.value = 0;
+          return;
+        }
+        rise.value = withTiming(0, { duration: SUN_RISE_MS, easing: Easing.out(Easing.cubic) });
+        breath.value = withDelay(
+          SUN_RISE_MS,
+          withRepeat(
+            withTiming(1, { duration: SUN_BREATH_MS, easing: Easing.inOut(Easing.sin) }),
+            -1,
+            true,
+          ),
+        );
+      });
+    return () => {
+      alive = false;
+      cancelAnimation(rise);
+      cancelAnimation(breath);
+    };
+  }, [animate, rise, breath]);
+
+  const sunStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: rise.value * SUN_D }, { scale: 1 + breath.value * 0.04 }],
+  }));
+  const haloStyle = useAnimatedStyle(() => ({
+    opacity: breath.value * 0.5,
+    transform: [{ translateY: rise.value * SUN_D }, { scale: 1 + breath.value * 0.4 }],
+  }));
+
+  return (
+    <View
+      style={styles.tile}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
+      <View style={styles.sky}>
+        <Animated.View style={[styles.sun, styles.halo, haloStyle]} />
+        <Animated.View style={[styles.sun, sunStyle]} />
+      </View>
+      <View style={styles.horizon} />
+    </View>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Styles — tokens from `frontend/constants/theme.ts` only. Marigold
+// appears only as the sun's fill.
+// ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   container: {
@@ -443,101 +446,77 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: spacing.screenPadding,
   },
-  brand: {
-    ...typography.overline,
-    color: colors.textPrimary,
+
+  tile: {
+    width: TILE,
+    height: TILE,
+    borderRadius: 52,
+    backgroundColor: colors.inkSurface,
+    overflow: 'hidden',
     marginBottom: spacing.xxxl,
   },
+  sky: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: HORIZON_Y,
+    overflow: 'hidden',
+  },
+  sun: {
+    position: 'absolute',
+    left: SUN_LEFT,
+    top: SUN_TOP,
+    width: SUN_D,
+    height: SUN_D,
+    borderRadius: SUN_D / 2,
+    backgroundColor: colors.accent,
+  },
+  halo: {
+    backgroundColor: colors.accentGlow,
+  },
+  horizon: {
+    position: 'absolute',
+    left: 6 * SCALE,
+    top: 23 * SCALE,
+    width: 20 * SCALE,
+    height: 2 * SCALE,
+    borderRadius: SCALE,
+    backgroundColor: colors.surface,
+    opacity: 0.9,
+  },
+
   headline: {
     ...typography.largeTitle,
     color: colors.textPrimary,
     textAlign: 'center',
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   subtitle: {
-    ...typography.callout,
+    ...typography.body,
     color: colors.textSecondary,
     textAlign: 'center',
-    marginBottom: spacing.xxxl,
+    marginBottom: spacing.xxl,
     maxWidth: 320,
   },
   messagesBlock: {
-    minHeight: 32,
-    marginBottom: spacing.xxxl,
-  },
-  dotWrapper: {
-    height: DOT_ROTOR_DIAMETER,
-    width: DOT_ROTOR_DIAMETER,
-    alignItems: 'center',
+    minHeight: 44,
     justifyContent: 'center',
-  },
-  dotRotor: {
-    height: DOT_ROTOR_DIAMETER,
-    width: DOT_ROTOR_DIAMETER,
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-  },
-  dot: {
-    width: DOT_DIAMETER,
-    height: DOT_DIAMETER,
-    borderRadius: DOT_DIAMETER / 2,
-    backgroundColor: colors.accent,
   },
 
   // ── Error state ───────────────────────────────────────────────
   errorBlock: {
     width: '100%',
-    alignItems: 'center',
+    maxWidth: 420,
+    gap: spacing.lg,
   },
   errorHeadline: {
     ...typography.title,
     color: colors.textPrimary,
     textAlign: 'center',
-    marginBottom: spacing.md,
-  },
-  errorSubtitle: {
-    ...typography.callout,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    marginBottom: spacing.xxxl,
-    maxWidth: 320,
   },
   errorActions: {
-    flexDirection: 'row',
     gap: spacing.md,
-    width: '100%',
-    justifyContent: 'center',
-  },
-  errorButton: {
-    flex: 1,
-    minHeight: 52,
-    maxWidth: 200,
-    borderRadius: spacing.buttonRadius,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-  },
-  errorButtonPrimary: {
-    backgroundColor: colors.errorSoft,
-    borderWidth: 1,
-    borderColor: colors.error,
-    ...shadows.sm,
-  },
-  errorButtonSecondary: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.error,
-  },
-  errorButtonPrimaryText: {
-    ...typography.headline,
-    color: colors.error,
-  },
-  errorButtonSecondaryText: {
-    ...typography.headline,
-    color: colors.error,
-  },
-  buttonDisabled: {
-    opacity: 0.5,
+    marginTop: spacing.sm,
   },
 });

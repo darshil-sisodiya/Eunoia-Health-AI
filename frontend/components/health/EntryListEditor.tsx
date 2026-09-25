@@ -1,9 +1,10 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { colors, spacing, typography } from '../../constants/theme';
 import { filterOptions } from '../../constants/onboarding';
+import { Button, IconButton, tap } from '../ui';
 
 export type EntryListEditorProps<T> = {
   /** Current entries. */
@@ -53,6 +54,7 @@ export default function EntryListEditor<T>({
   capMessage = 'That is the maximum we can record here.',
 }: EntryListEditorProps<T>) {
   const [query, setQuery] = useState('');
+  const [focused, setFocused] = useState(false);
   const [openKeys, setOpenKeys] = useState<Record<string, boolean>>({});
 
   const names = useMemo(
@@ -100,28 +102,31 @@ export default function EntryListEditor<T>({
 
   return (
     <View>
-      <View style={styles.searchRow}>
-        <Ionicons name="search" size={18} color={colors.textTertiary} />
+      <View style={[styles.searchRow, focused && styles.searchRowFocused]}>
+        <Ionicons name="search" size={18} color={focused ? colors.textPrimary : colors.textTertiary} />
         <TextInput
           style={styles.searchInput}
           value={query}
           onChangeText={setQuery}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           placeholder={searchPlaceholder}
           placeholderTextColor={colors.textMuted}
           accessibilityLabel={searchPlaceholder}
+          returnKeyType="done"
+          onSubmitEditing={() => (canAddCustom ? add(trimmed) : undefined)}
         />
       </View>
 
       {canAddCustom ? (
-        <TouchableOpacity
-          style={styles.addCustom}
+        <Button
+          label={`Add "${trimmed}"`}
+          icon="add"
+          variant="secondary"
+          compact
           onPress={() => add(trimmed)}
-          accessibilityRole="button"
-          accessibilityLabel={`Add ${trimmed}`}
-        >
-          <Ionicons name="add-circle-outline" size={18} color={colors.accent} />
-          <Text style={styles.addCustomText}>{`Add "${trimmed}"`}</Text>
-        </TouchableOpacity>
+          style={styles.addCustom}
+        />
       ) : null}
 
       {value.map((entry) => {
@@ -132,43 +137,36 @@ export default function EntryListEditor<T>({
         const summary = summaryOf?.(entry) ?? '';
 
         return (
-          <View key={name} style={[styles.card, warn && styles.cardWarning]}>
-            <TouchableOpacity
-              style={styles.header}
-              onPress={() => toggleOpen(name)}
-              accessibilityRole="button"
-              accessibilityState={{ expanded: open }}
-              accessibilityLabel={`Details for ${name}`}
-            >
-              <View style={styles.titleWrap}>
-                <Text style={[styles.name, warn && styles.nameWarning]}>{name}</Text>
-                {incomplete ? (
-                  <Text style={styles.needsDetail}>Needs detail</Text>
-                ) : summary ? (
-                  <Text style={styles.summary}>{summary}</Text>
-                ) : null}
-              </View>
-              <Ionicons
-                name={open ? 'chevron-up' : 'chevron-down'}
-                size={18}
-                color={colors.textTertiary}
-              />
-            </TouchableOpacity>
+          <View key={name} style={styles.card}>
+            <View style={styles.header}>
+              <Pressable
+                style={({ pressed }) => [styles.headerToggle, pressed && styles.pressed]}
+                onPress={() => toggleOpen(name)}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: open }}
+                accessibilityLabel={`Details for ${name}`}
+              >
+                <View style={styles.titleWrap}>
+                  <View style={styles.nameRow}>
+                    {warn ? <Ionicons name="warning" size={16} color={colors.error} /> : null}
+                    <Text style={[styles.name, warn && styles.nameWarning]}>{name}</Text>
+                  </View>
+                  {incomplete ? (
+                    <Text style={styles.needsDetail}>Needs detail</Text>
+                  ) : summary ? (
+                    <Text style={styles.summary}>{summary}</Text>
+                  ) : null}
+                </View>
+                <Ionicons
+                  name={open ? 'chevron-up' : 'chevron-down'}
+                  size={18}
+                  color={colors.textTertiary}
+                />
+              </Pressable>
+              <IconButton icon="trash-outline" label={`Remove ${name}`} onPress={() => remove(name)} />
+            </View>
 
-            {open ? (
-              <View style={styles.detail}>
-                {renderDetail(entry, (patch) => update(name, patch))}
-                <TouchableOpacity
-                  style={styles.removeRow}
-                  onPress={() => remove(name)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Remove ${name}`}
-                >
-                  <Ionicons name="trash-outline" size={16} color={colors.error} />
-                  <Text style={styles.removeText}>Remove</Text>
-                </TouchableOpacity>
-              </View>
-            ) : null}
+            {open ? <View style={styles.detail}>{renderDetail(entry, (patch) => update(name, patch))}</View> : null}
           </View>
         );
       })}
@@ -178,17 +176,23 @@ export default function EntryListEditor<T>({
         {visible.map((option) => {
           const selected = names.has(option.toLowerCase());
           return (
-            <TouchableOpacity
+            <Pressable
               key={option}
-              style={[styles.option, selected && styles.optionSelected]}
-              onPress={() => (selected ? remove(option) : add(option))}
+              style={({ pressed }) => [styles.option, selected && styles.optionSelected, pressed && styles.pressed]}
+              onPress={() => {
+                tap();
+                if (selected) remove(option);
+                else add(option);
+              }}
+              hitSlop={4}
               accessibilityRole="button"
               accessibilityState={{ selected }}
             >
+              {selected ? <Ionicons name="checkmark" size={16} color={colors.textInverse} /> : null}
               <Text style={[styles.optionText, selected && styles.optionTextSelected]}>
                 {option}
               </Text>
-            </TouchableOpacity>
+            </Pressable>
           );
         })}
       </View>
@@ -202,49 +206,62 @@ const styles = StyleSheet.create({
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    gap: spacing.md,
+    minHeight: 54,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
     borderRadius: spacing.inputRadius,
-    backgroundColor: colors.backgroundSecondary,
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderColor: colors.surfaceBorder,
     marginBottom: spacing.md,
+  },
+  searchRowFocused: {
+    borderColor: colors.textPrimary,
   },
   searchInput: {
     ...typography.body,
     color: colors.textPrimary,
     flex: 1,
-    padding: 0,
-  },
-  addCustom: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
     paddingVertical: spacing.md,
-  },
-  addCustomText: {
-    ...typography.bodyMedium,
-    color: colors.accent,
+    outlineStyle: 'none',
+  } as any,
+  addCustom: {
+    alignSelf: 'flex-start',
+    marginBottom: spacing.md,
   },
   card: {
-    borderRadius: spacing.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderRadius: spacing.cardRadiusLg,
     backgroundColor: colors.surface,
     marginBottom: spacing.sm,
     overflow: 'hidden',
   },
-  cardWarning: {
-    borderColor: colors.error,
-  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingRight: spacing.sm,
+  },
+  headerToggle: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.lg,
+    gap: spacing.sm,
+    minHeight: 56,
+    paddingVertical: spacing.md,
+    paddingLeft: spacing.lg,
+    paddingRight: spacing.xs,
+  },
+  pressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
   },
   titleWrap: {
     flexShrink: 1,
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
   },
   name: {
     ...typography.headline,
@@ -256,33 +273,22 @@ const styles = StyleSheet.create({
   needsDetail: {
     ...typography.caption,
     color: colors.warning,
-    marginTop: spacing.xs,
+    marginTop: 2,
   },
   summary: {
     ...typography.caption,
-    color: colors.textTertiary,
-    marginTop: spacing.xs,
+    color: colors.textSecondary,
+    marginTop: 2,
   },
   detail: {
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
-    paddingTop: spacing.lg,
-    borderTopWidth: 1,
+    padding: spacing.lg,
+    paddingBottom: spacing.xs,
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.divider,
-  },
-  removeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    paddingVertical: spacing.sm,
-  },
-  removeText: {
-    ...typography.caption,
-    color: colors.error,
   },
   catalogueLabel: {
     ...typography.overline,
-    color: colors.textTertiary,
+    color: colors.textSecondary,
     marginTop: spacing.lg,
     marginBottom: spacing.md,
   },
@@ -292,20 +298,20 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   option: {
-    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    minHeight: 40,
     paddingHorizontal: spacing.lg,
     borderRadius: spacing.chipRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
     backgroundColor: colors.surface,
   },
   optionSelected: {
     backgroundColor: colors.inkSurface,
-    borderColor: colors.inkSurface,
   },
   optionText: {
-    ...typography.caption,
-    color: colors.textSecondary,
+    ...typography.callout,
+    color: colors.textPrimary,
   },
   optionTextSelected: {
     color: colors.textInverse,

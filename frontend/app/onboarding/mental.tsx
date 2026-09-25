@@ -69,28 +69,35 @@ export default function MentalScreen() {
     <OnboardingShell
       step={step}
       totalSteps={totalSteps}
-      eyebrow="How you have been feeling"
+      eyebrow="Mood and worry"
       canAdvance
       onBack={goBack}
       onAdvance={goNext}
       advanceLabel="Continue"
     >
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scroll}
+      >
         <Text style={styles.headline} accessibilityRole="header">
           Over the last two weeks, how often have you been bothered by…
         </Text>
         <Text style={styles.subtitle}>
-          Four questions. Answer honestly — this is private, and a rough answer
+          Four questions. Your answers stay private, and an honest rough answer
           is more useful than a flattering one.
         </Text>
 
         <View style={styles.block}>
-          <Text style={styles.blockTitle}>Mood</Text>
+          <Text style={styles.blockTitle} accessibilityRole="header">
+            Mood
+          </Text>
           {PHQ2.map(renderQuestion)}
         </View>
 
         <View style={styles.block}>
-          <Text style={styles.blockTitle}>Worry</Text>
+          <Text style={styles.blockTitle} accessibilityRole="header">
+            Worry
+          </Text>
           {GAD2.map(renderQuestion)}
         </View>
 
@@ -104,13 +111,18 @@ export default function MentalScreen() {
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    paddingBottom: spacing.xl,
+  },
+  // Validated PHQ-2 / GAD-2 stem, kept verbatim, so a smaller serif size
+  // than other steps keeps it to two or three lines.
   headline: {
     ...typography.title,
     color: colors.textPrimary,
     marginBottom: spacing.md,
   },
   subtitle: {
-    ...typography.callout,
+    ...typography.body,
     color: colors.textSecondary,
     marginBottom: spacing.xxl,
   },
@@ -118,13 +130,12 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xl,
   },
   blockTitle: {
-    ...typography.overline,
-    color: colors.textTertiary,
+    ...typography.subtitle,
+    color: colors.textPrimary,
     marginBottom: spacing.md,
   },
   disclaimer: {
-    ...typography.caption,
-    color: colors.textTertiary,
-    marginBottom: spacing.xl,
+    ...typography.callout,
+    color: colors.textSecondary,
   },
 });

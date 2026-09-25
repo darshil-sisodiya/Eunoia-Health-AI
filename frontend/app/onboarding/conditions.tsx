@@ -45,14 +45,13 @@ export default function ConditionsScreen() {
       onAdvance={goNext}
       advanceLabel="Continue"
     >
-      <KeyboardAwareScreenScrollView>
+      <KeyboardAwareScreenScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.headline} accessibilityRole="header">
           Has a doctor diagnosed you with anything?
         </Text>
         <Text style={styles.subtitle}>
-          Add anything ongoing. We will ask a couple of quick questions about
-          each one — how long you have had it and how well it is managed matter
-          more than the name.
+          Add anything ongoing. For each one we ask how long you have had it
+          and how well it is managed, since that matters more than the name.
         </Text>
 
         <ConditionsEditor value={conditions} onChange={setConditions} />
@@ -84,20 +83,20 @@ export default function ConditionsScreen() {
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    paddingBottom: spacing.xl,
+  },
   headline: {
     ...typography.largeTitle,
     color: colors.textPrimary,
     marginBottom: spacing.md,
   },
   subtitle: {
-    ...typography.callout,
+    ...typography.body,
     color: colors.textSecondary,
     marginBottom: spacing.xl,
   },
   medsPrompt: {
     marginTop: spacing.xxl,
-    paddingTop: spacing.lg,
-    borderTopWidth: 1,
-    borderTopColor: colors.divider,
   },
 });

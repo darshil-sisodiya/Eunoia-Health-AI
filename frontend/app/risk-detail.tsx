@@ -1,18 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
-import { colors, spacing, typography } from '../constants/theme';
+import { colors, fonts, spacing, typography } from '../constants/theme';
 import { ONBOARDING_COPY } from '../constants/onboarding';
+import { Button, Notice, ScreenHeader } from '../components/ui';
 import {
   ComponentBars,
   ConfidencePill,
@@ -21,6 +15,7 @@ import {
   TopDrivers,
   toneColors,
 } from '../components/health/RiskBreakdown';
+import { componentBars } from '../utils/riskView';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getReports,
@@ -29,21 +24,19 @@ import {
   type GeminiInsights,
 } from '../utils/onboardingApi';
 
+const NO_REPORTS = "You don't have a report yet. Answer a few questions about your health to get one.";
+
 /**
  * Risk Detail Screen.
  *
  * Renders the same content the user saw at the end of onboarding
  * (wellness score, risk level, hereditary indicators, AI insights)
  * for any persisted report on the user's history. Reached from the
- * dashboard's Risk Score card.
+ * dashboard's wellness card.
  *
  * Routing:
  *   - With no params it loads the latest report (head of `/api/reports`).
  *   - With `?id=<n>` it loads the matching report from the same list.
- *
- * Visual language matches onboarding/result.tsx so the user experiences
- * a consistent presentation between first-time onboarding and dashboard
- * review.
  */
 export default function RiskDetail() {
   const { token } = useAuth();
@@ -62,7 +55,7 @@ export default function RiskDetail() {
   const load = useCallback(async () => {
     if (!token) {
       setLoading(false);
-      setError('Please sign in again to view your report.');
+      setError('Your session has ended. Sign in again to view your report.');
       return;
     }
     setLoading(true);
@@ -71,7 +64,7 @@ export default function RiskDetail() {
       const reports = await getReports(token);
       if (reports.length === 0) {
         setReport(null);
-        setError('No reports available yet.');
+        setError(NO_REPORTS);
         return;
       }
       const picked =
@@ -81,7 +74,7 @@ export default function RiskDetail() {
       setReport(picked);
     } catch (e) {
       console.warn('RiskDetail: getReports failed', e);
-      setError('Unable to load your report. Pull to retry.');
+      setError("Your report didn't load. Check your connection and try again.");
     } finally {
       setLoading(false);
     }
@@ -99,7 +92,7 @@ export default function RiskDetail() {
   if (loading) {
     return (
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
-        <Header onBack={handleBack} />
+        <ScreenHeader title="Health report" onBack={handleBack} />
         <View style={styles.center}>
           <ActivityIndicator size="small" color={colors.textTertiary} />
         </View>
@@ -108,21 +101,26 @@ export default function RiskDetail() {
   }
 
   if (error || !report) {
+    const empty = error === NO_REPORTS;
     return (
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
-        <Header onBack={handleBack} />
-        <View style={styles.center}>
-          <Text style={styles.errorEyebrow}>{ONBOARDING_COPY.result.eyebrow}</Text>
-          <Text style={styles.errorText}>{error ?? 'Report not found.'}</Text>
-          <TouchableOpacity
-            style={styles.retryBtn}
-            onPress={load}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel="Retry"
-          >
-            <Text style={styles.retryBtnText}>Retry</Text>
-          </TouchableOpacity>
+        <ScreenHeader title="Health report" onBack={handleBack} />
+        <View style={styles.body}>
+          {empty ? (
+            <View style={styles.card}>
+              <Text style={styles.cardBody}>{NO_REPORTS}</Text>
+              <Button
+                label="Build your health profile"
+                onPress={() => router.push('/onboarding/welcome' as any)}
+                style={styles.emptyButton}
+              />
+            </View>
+          ) : (
+            <>
+              <Notice tone="error">{error ?? "This report couldn't be found."}</Notice>
+              <Button label="Try again" variant="secondary" onPress={load} style={styles.emptyButton} />
+            </>
+          )}
         </View>
       </SafeAreaView>
     );
@@ -133,168 +131,162 @@ export default function RiskDetail() {
   const hereditaryFactors = report.contributing_factors.filter((factor) =>
     factor.dimension.startsWith('family_history.'),
   );
+  const tone = toneColors(report.risk_level);
+  const hasBars = componentBars(report).length > 0;
+  const timestamp = formatTimestamp(report.created_at);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
-      <Header onBack={handleBack} />
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Hero */}
-        <View style={styles.hero} accessibilityRole="header">
-          <Text style={styles.heroEyebrow}>{ONBOARDING_COPY.result.eyebrow}</Text>
-          <Text
-            style={styles.wellnessScore}
-            accessibilityLabel={`${ONBOARDING_COPY.result.wellnessLabel} ${report.wellness_score}`}
-          >
-            {report.wellness_score}
-          </Text>
-          <Text style={styles.wellnessLabel}>{ONBOARDING_COPY.result.wellnessLabel}</Text>
+        <ScreenHeader
+          title="Health report"
+          subtitle={timestamp ? `Assessed ${timestamp}` : undefined}
+          onBack={handleBack}
+        />
 
+        <View style={styles.body}>
+          {/* ── Hero ───────────────────────────────────── */}
           <View
-            style={[styles.riskBadge, { backgroundColor: toneColors(report.risk_level).bg }]}
-            accessibilityRole="text"
-            accessibilityLabel={`${ONBOARDING_COPY.result.riskLabel} ${report.risk_level}`}
+            style={styles.hero}
+            accessible
+            accessibilityLabel={`${ONBOARDING_COPY.result.scoreLabel} ${report.risk_score} ${ONBOARDING_COPY.result.scoreOutOf}, ${report.risk_level} risk`}
           >
-            <Text style={styles.riskBadgeLabel}>{`${ONBOARDING_COPY.result.riskLabel} · `}</Text>
-            <Text
-              style={[styles.riskBadgeValue, { color: toneColors(report.risk_level).fg }]}
-            >
-              {report.risk_level}
-            </Text>
-          </View>
-
-          {/* States how much of the picture this is based on, rather than
-              presenting a partly-informed score as a settled fact. */}
-          <View style={styles.confidenceWrap}>
+            <Text style={styles.heroLabel}>{ONBOARDING_COPY.result.scoreLabel}</Text>
+            <View style={styles.scoreRow}>
+              <Text style={styles.score}>{report.risk_score}</Text>
+              <View style={styles.scoreSide}>
+                <Text style={styles.scoreOutOf}>{ONBOARDING_COPY.result.scoreOutOf}</Text>
+                <View style={[styles.riskChip, { backgroundColor: tone.bg }]}>
+                  <View style={[styles.riskDot, { backgroundColor: tone.fg }]} />
+                  <Text style={[styles.riskChipText, { color: tone.fg }]}>
+                    {`${report.risk_level} risk`}
+                  </Text>
+                </View>
+              </View>
+            </View>
+            {/* How much of the picture this is based on, rather than
+                presenting a partly-informed score as a settled fact. */}
             <ConfidencePill report={report} />
           </View>
 
-          <Text style={styles.timestamp}>{formatTimestamp(report.created_at)}</Text>
-        </View>
-
-        {/* Where the score comes from: each component against its own cap,
-            the biggest drivers with their multiplier arithmetic, the
-            recognised screening scores, and what is still unknown. */}
-        <View style={styles.breakdown}>
-          <Text style={styles.breakdownTitle}>Where this comes from</Text>
-          <ComponentBars report={report} />
+          {/* Where the score comes from: each component against its own cap,
+              the biggest drivers, the recognised screening scores, and what
+              is still unknown. */}
+          {hasBars ? (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle} accessibilityRole="header">
+                Where this comes from
+              </Text>
+              <Text style={styles.cardCaption}>Each area measured against its own maximum.</Text>
+              <ComponentBars report={report} />
+            </View>
+          ) : null}
           <TopDrivers report={report} />
           <SubScores report={report} />
           <GetCheckedCard report={report} />
+
+          {/* ── AI insights ────────────────────────────── */}
+          <View style={styles.sectionHead}>
+            <Text style={styles.sectionTitle} accessibilityRole="header">
+              Your personal insights
+            </Text>
+            <Text style={styles.sectionCaption}>
+              Written for you from your answers. Not a diagnosis.
+            </Text>
+          </View>
+
+          {aiUnavailable ? (
+            <Notice tone="info">{ONBOARDING_COPY.result.aiUnavailableMessage}</Notice>
+          ) : (
+            <>
+              <InsightCard
+                title={ONBOARDING_COPY.result.sections.preventiveInsights}
+                body={insights?.preventive_health_insights}
+              />
+              <LifestyleCard insights={insights} />
+              <InsightCard
+                title={ONBOARDING_COPY.result.sections.mentalWellness}
+                body={insights?.mental_wellness_improvements}
+              />
+            </>
+          )}
+
+          <HereditaryCard factors={hereditaryFactors} />
+
+          {!aiUnavailable && (
+            <>
+              <InsightCard
+                title={ONBOARDING_COPY.result.sections.longTermAwareness}
+                body={insights?.long_term_wellness_awareness}
+              />
+              <InsightCard
+                title={ONBOARDING_COPY.result.sections.habitOptimization}
+                body={insights?.habit_optimization_recommendations}
+              />
+            </>
+          )}
         </View>
-
-        {/* Trend placeholder */}
-        <View
-          style={styles.trendPlaceholder}
-          accessibilityRole="text"
-          accessibilityLabel={ONBOARDING_COPY.result.sections.trendPlaceholder}
-        >
-          <Text style={styles.trendPlaceholderText}>
-            {ONBOARDING_COPY.result.sections.trendPlaceholder}
-          </Text>
-        </View>
-
-        {/* Cards */}
-        {aiUnavailable ? (
-          <AiUnavailablePanel />
-        ) : (
-          <>
-            <InsightCard
-              title={ONBOARDING_COPY.result.sections.preventiveInsights}
-              body={insights?.preventive_health_insights}
-            />
-            <LifestyleCard insights={insights} />
-            <InsightCard
-              title={ONBOARDING_COPY.result.sections.mentalWellness}
-              body={insights?.mental_wellness_improvements}
-            />
-          </>
-        )}
-
-        <HereditaryCard factors={hereditaryFactors} />
-
-        {!aiUnavailable && (
-          <>
-            <InsightCard
-              title={ONBOARDING_COPY.result.sections.longTermAwareness}
-              body={insights?.long_term_wellness_awareness}
-            />
-            <InsightCard
-              title={ONBOARDING_COPY.result.sections.habitOptimization}
-              body={insights?.habit_optimization_recommendations}
-            />
-          </>
-        )}
-
-        <TouchableOpacity
-          style={styles.primaryCta}
-          onPress={handleBack}
-          activeOpacity={0.9}
-          accessibilityRole="button"
-          accessibilityLabel="Back to dashboard"
-        >
-          <Text style={styles.primaryCtaText}>Back to dashboard</Text>
-        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-// ── Header ───────────────────────────────────────────────────────
+// ── Cards (mirroring onboarding/result.tsx) ──────────────────────
 
-function Header({ onBack }: { onBack: () => void }) {
-  return (
-    <View style={styles.header}>
-      <TouchableOpacity
-        style={styles.headerBtn}
-        onPress={onBack}
-        activeOpacity={0.85}
-        accessibilityRole="button"
-        accessibilityLabel="Back"
-      >
-        <Ionicons name="chevron-back" size={20} color={colors.textPrimary} />
-      </TouchableOpacity>
-      <Text style={styles.headerTitle}>Health Report</Text>
-      <View style={styles.headerSpacer} />
-    </View>
-  );
-}
-
-// ── Card primitives (mirroring onboarding/result.tsx) ────────────
+/** Long AI sections start folded so the report stays scannable. */
+const COLLAPSE_AT = 360;
 
 function InsightCard({ title, body }: { title: string; body: string | undefined | null }) {
+  const [open, setOpen] = useState(false);
   const trimmed = typeof body === 'string' ? body.trim() : '';
   if (!trimmed) return null;
+  const long = trimmed.length > COLLAPSE_AT;
   return (
-    <View style={styles.card} accessibilityRole="summary">
-      <Text style={styles.cardTitle}>{title}</Text>
-      <Text style={styles.cardBody}>{trimmed}</Text>
+    <View style={styles.card}>
+      <Text style={styles.cardTitle} accessibilityRole="header">
+        {title}
+      </Text>
+      <Text style={styles.cardBody} numberOfLines={long && !open ? 5 : undefined}>
+        {trimmed}
+      </Text>
+      {long ? (
+        <Pressable
+          onPress={() => setOpen((o) => !o)}
+          hitSlop={10}
+          style={({ pressed }) => [styles.more, pressed && styles.pressed]}
+          accessibilityRole="button"
+          accessibilityLabel={open ? `Show less of ${title}` : `Read all of ${title}`}
+          accessibilityState={{ expanded: open }}
+        >
+          <Text style={styles.moreText}>{open ? 'Show less' : 'Read more'}</Text>
+          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textPrimary} />
+        </Pressable>
+      ) : null}
     </View>
   );
 }
 
 function LifestyleCard({ insights }: { insights: GeminiInsights | null | undefined }) {
   const sections = [
-    insights?.lifestyle_recommendations,
-    insights?.diet_suggestions,
-    insights?.exercise_guidance,
+    { label: 'Daily habits', text: insights?.lifestyle_recommendations },
+    { label: 'Diet', text: insights?.diet_suggestions },
+    { label: 'Exercise', text: insights?.exercise_guidance },
   ]
-    .map((value) => (typeof value === 'string' ? value.trim() : ''))
-    .filter((value) => value.length > 0);
+    .map((s) => ({ ...s, text: typeof s.text === 'string' ? s.text.trim() : '' }))
+    .filter((s) => s.text.length > 0);
 
   if (sections.length === 0) return null;
 
   return (
-    <View style={styles.card} accessibilityRole="summary">
-      <Text style={styles.cardTitle}>
+    <View style={styles.card}>
+      <Text style={styles.cardTitle} accessibilityRole="header">
         {ONBOARDING_COPY.result.sections.lifestyleOptimization}
       </Text>
-      {sections.map((section, index) => (
-        <Text
-          key={`lifestyle-${index}`}
-          style={[styles.cardBody, index < sections.length - 1 && styles.cardBodyParagraph]}
-        >
-          {section}
-        </Text>
+      {sections.map((section) => (
+        <View key={section.label} style={styles.subsection}>
+          <Text style={styles.subsectionLabel}>{section.label}</Text>
+          <Text style={styles.cardBody}>{section.text}</Text>
+        </View>
       ))}
     </View>
   );
@@ -302,37 +294,25 @@ function LifestyleCard({ insights }: { insights: GeminiInsights | null | undefin
 
 function HereditaryCard({ factors }: { factors: ContributingFactor[] }) {
   return (
-    <View style={styles.card} accessibilityRole="summary">
-      <Text style={styles.cardTitle}>
+    <View style={styles.card}>
+      <Text style={styles.cardTitle} accessibilityRole="header">
         {ONBOARDING_COPY.result.sections.hereditaryIndicators}
       </Text>
       {factors.length === 0 ? (
-        <Text style={styles.cardBody}>—</Text>
+        <Text style={styles.cardBody}>No family history recorded.</Text>
       ) : (
-        factors.map((factor) => (
+        factors.map((factor, index) => (
           <View
             key={factor.dimension}
-            style={styles.hereditaryRow}
-            accessibilityRole="text"
-            accessibilityLabel={`${extractCondition(factor.dimension)}, ${factor.component}`}
+            style={[styles.hereditaryRow, index > 0 && styles.rowDivider]}
+            accessible
+            accessibilityLabel={`${extractCondition(factor.dimension)}, adds ${factor.delta}`}
           >
-            <Text style={styles.hereditaryCondition}>
-              {extractCondition(factor.dimension)}
-            </Text>
-            <Text style={styles.hereditaryComponent}>{factor.component}</Text>
+            <Text style={styles.hereditaryCondition}>{extractCondition(factor.dimension)}</Text>
+            <Text style={styles.hereditaryDelta}>{`+${factor.delta}`}</Text>
           </View>
         ))
       )}
-    </View>
-  );
-}
-
-function AiUnavailablePanel() {
-  return (
-    <View style={styles.aiUnavailablePanel} accessibilityRole="text">
-      <Text style={styles.aiUnavailableText}>
-        {ONBOARDING_COPY.result.aiUnavailableMessage}
-      </Text>
     </View>
   );
 }
@@ -341,10 +321,7 @@ function AiUnavailablePanel() {
 
 function extractCondition(dimension: string): string {
   const prefix = 'family_history.';
-  if (dimension.startsWith(prefix)) {
-    return dimension.slice(prefix.length);
-  }
-  return dimension;
+  return dimension.startsWith(prefix) ? dimension.slice(prefix.length) : dimension;
 }
 
 function formatTimestamp(iso: string | undefined): string {
@@ -361,19 +338,6 @@ function formatTimestamp(iso: string | undefined): string {
 }
 
 const styles = StyleSheet.create({
-  confidenceWrap: {
-    marginTop: spacing.md,
-    alignItems: 'center',
-  },
-  breakdown: {
-    paddingHorizontal: spacing.screenPadding,
-    marginTop: spacing.xl,
-  },
-  breakdownTitle: {
-    ...typography.title,
-    color: colors.textPrimary,
-    marginBottom: spacing.md,
-  },
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -382,191 +346,149 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: spacing.screenPadding,
-    gap: spacing.lg,
   },
-  // ── Header ─────────────────────────────────────────────────────
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.screenPadding,
-    paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-    backgroundColor: colors.background,
-  },
-  headerBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  headerSpacer: {
-    width: 40,
-    height: 40,
-  },
-  headerTitle: {
-    ...typography.headline,
-    color: colors.textPrimary,
-  },
-  // ── Scroll ─────────────────────────────────────────────────────
   scrollContent: {
-    paddingHorizontal: spacing.screenPadding,
-    paddingTop: spacing.xxl,
     paddingBottom: spacing.xxxl,
   },
+  body: {
+    paddingHorizontal: spacing.screenPadding,
+    gap: spacing.md,
+  },
+  pressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
+  },
+  emptyButton: {
+    marginTop: spacing.lg,
+  },
+
   // ── Hero ───────────────────────────────────────────────────────
   hero: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: spacing.xxl,
+    backgroundColor: colors.inkSurface,
+    borderRadius: spacing.cardRadiusXl,
+    padding: spacing.xl,
+    paddingBottom: spacing.xxl,
   },
-  heroEyebrow: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: spacing.lg,
+  heroLabel: {
+    ...typography.headline,
+    color: colors.textInverse,
   },
-  wellnessScore: {
-    ...typography.numericLarge,
-    color: colors.textPrimary,
-    textAlign: 'center',
-  },
-  wellnessLabel: {
-    ...typography.callout,
-    color: colors.textSecondary,
-    marginTop: spacing.sm,
-    marginBottom: spacing.lg,
-  },
-  riskBadge: {
+  scoreRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorderStrong,
-    borderRadius: spacing.chipRadius,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-  },
-  riskBadgeLabel: {
-    ...typography.callout,
-    color: colors.textTertiary,
-  },
-  riskBadgeValue: {
-    ...typography.callout,
-    color: colors.textPrimary,
-    fontWeight: '700',
-  },
-  timestamp: {
-    ...typography.caption,
-    color: colors.textTertiary,
-    marginTop: spacing.lg,
-  },
-  // ── Trend placeholder ──────────────────────────────────────────
-  trendPlaceholder: {
-    height: 140,
-    backgroundColor: colors.skeleton,
-    borderRadius: spacing.cardRadiusLg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: spacing.lg,
+    alignItems: 'flex-end',
+    gap: spacing.lg,
+    marginTop: spacing.md,
     marginBottom: spacing.xl,
   },
-  trendPlaceholderText: {
-    ...typography.callout,
-    color: colors.textTertiary,
+  score: {
+    ...typography.mega,
+    fontSize: 80,
+    lineHeight: 84,
+    color: colors.textInverse,
+    fontVariant: ['tabular-nums'],
   },
-  // ── Cards ──────────────────────────────────────────────────────
+  scoreSide: {
+    paddingBottom: 12,
+    gap: spacing.sm,
+    alignItems: 'flex-start',
+  },
+  scoreOutOf: {
+    ...typography.callout,
+    color: colors.textInverseMuted,
+  },
+  riskChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: spacing.chipRadius,
+  },
+  riskDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  riskChipText: {
+    ...typography.caption,
+    fontFamily: fonts.semibold,
+  },
+
+  // ── Sections & cards ───────────────────────────────────────────
+  sectionHead: {
+    marginTop: spacing.xl,
+  },
+  sectionTitle: {
+    ...typography.title,
+    color: colors.textPrimary,
+  },
+  sectionCaption: {
+    ...typography.caption,
+    fontFamily: fonts.regular,
+    color: colors.textTertiary,
+    marginTop: spacing.xs,
+  },
   card: {
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
     borderRadius: spacing.cardRadiusLg,
     padding: spacing.xl,
-    marginBottom: spacing.lg,
   },
   cardTitle: {
-    ...typography.headline,
+    ...typography.title,
     color: colors.textPrimary,
     marginBottom: spacing.sm,
+  },
+  cardCaption: {
+    ...typography.caption,
+    fontFamily: fonts.regular,
+    color: colors.textTertiary,
+    marginTop: -spacing.xs,
+    marginBottom: spacing.lg,
   },
   cardBody: {
     ...typography.body,
     color: colors.textSecondary,
   },
-  cardBodyParagraph: {
-    marginBottom: spacing.md,
+  more: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 4,
+    minHeight: 32,
+    marginTop: spacing.sm,
+  },
+  moreText: {
+    ...typography.callout,
+    fontFamily: fonts.semibold,
+    color: colors.textPrimary,
+  },
+  subsection: {
+    marginTop: spacing.md,
+  },
+  subsectionLabel: {
+    ...typography.headline,
+    color: colors.textPrimary,
+    marginBottom: 2,
+  },
+  rowDivider: {
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
   },
   hereditaryRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    minHeight: 48,
     paddingVertical: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.divider,
   },
   hereditaryCondition: {
-    ...typography.body,
+    ...typography.bodyMedium,
     color: colors.textPrimary,
-    fontWeight: '600',
+    flex: 1,
   },
-  hereditaryComponent: {
-    ...typography.caption,
-    color: colors.textTertiary,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  aiUnavailablePanel: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    borderRadius: spacing.cardRadiusLg,
-    padding: spacing.xl,
-    marginBottom: spacing.lg,
-  },
-  aiUnavailableText: {
-    ...typography.body,
-    color: colors.textSecondary,
-  },
-  // ── Primary CTA ────────────────────────────────────────────────
-  primaryCta: {
-    backgroundColor: colors.inkSurface,
-    borderRadius: spacing.buttonRadius,
-    paddingVertical: spacing.lg,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: spacing.lg,
-  },
-  primaryCtaText: {
+  hereditaryDelta: {
     ...typography.headline,
-    color: colors.textInverse,
-  },
-  // ── Error / empty ──────────────────────────────────────────────
-  errorEyebrow: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: spacing.sm,
-  },
-  errorText: {
-    ...typography.body,
     color: colors.textSecondary,
-    textAlign: 'center',
-  },
-  retryBtn: {
-    marginTop: spacing.md,
-    paddingHorizontal: spacing.xxl,
-    paddingVertical: spacing.md,
-    borderRadius: spacing.buttonRadius,
-    backgroundColor: colors.inkSurface,
-  },
-  retryBtnText: {
-    ...typography.headline,
-    color: colors.textInverse,
+    fontVariant: ['tabular-nums'],
   },
 });

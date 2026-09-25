@@ -3,6 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import Animated, {
   Easing,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
@@ -68,9 +69,15 @@ export const ProgressMessages: React.FC<ProgressMessagesProps> = ({
   testID,
 }) => {
   const [index, setIndex] = useState(0);
+  // With reduced motion the messages still advance on the same schedule,
+  // but swap instantly instead of fading and sliding.
+  const reduceMotion = useReducedMotion();
+  const fromY = reduceMotion ? TRANSLATE_Y_TO : TRANSLATE_Y_FROM;
+  const to = (value: number, duration: number) =>
+    reduceMotion ? value : withTiming(value, { duration, easing: EASING });
 
   const opacity = useSharedValue(0);
-  const translateY = useSharedValue(TRANSLATE_Y_FROM);
+  const translateY = useSharedValue(fromY);
 
   const fadeOutTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const advanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -99,41 +106,36 @@ export const ProgressMessages: React.FC<ProgressMessagesProps> = ({
 
     if (settled) {
       // Settle smoothly on the current message: no further advance.
-      opacity.value = withTiming(1, { duration: FADE_IN_MS, easing: EASING });
-      translateY.value = withTiming(TRANSLATE_Y_TO, {
-        duration: FADE_IN_MS,
-        easing: EASING,
-      });
+      opacity.value = to(1, FADE_IN_MS);
+      translateY.value = to(TRANSLATE_Y_TO, FADE_IN_MS);
       return clearTimers;
     }
 
     // Begin the fade-in cycle for the current message.
     opacity.value = 0;
-    translateY.value = TRANSLATE_Y_FROM;
-    opacity.value = withTiming(1, { duration: FADE_IN_MS, easing: EASING });
-    translateY.value = withTiming(TRANSLATE_Y_TO, {
-      duration: FADE_IN_MS,
-      easing: EASING,
-    });
+    translateY.value = fromY;
+    opacity.value = to(1, FADE_IN_MS);
+    translateY.value = to(TRANSLATE_Y_TO, FADE_IN_MS);
 
     if (isLast) {
       // Hold the last message visible until `done` or `error` flips.
       return clearTimers;
     }
 
-    fadeOutTimeoutRef.current = setTimeout(() => {
-      opacity.value = withTiming(0, {
-        duration: FADE_OUT_MS,
-        easing: EASING,
-      });
-    }, FADE_IN_MS + HOLD_MS);
+    if (!reduceMotion) {
+      fadeOutTimeoutRef.current = setTimeout(() => {
+        opacity.value = to(0, FADE_OUT_MS);
+      }, FADE_IN_MS + HOLD_MS);
+    }
 
     advanceTimeoutRef.current = setTimeout(() => {
       setIndex((prev) => Math.min(prev + 1, lastIndex));
     }, STEP_DURATION_MS);
 
     return clearTimers;
-  }, [currentIndex, settled, isLast, lastIndex, opacity, translateY]);
+    // `to` and `fromY` derive from `reduceMotion` only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentIndex, settled, isLast, lastIndex, opacity, translateY, reduceMotion]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,

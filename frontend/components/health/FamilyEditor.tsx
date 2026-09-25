@@ -1,11 +1,12 @@
 import React, { useCallback, useMemo } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import SegmentedRow from '../onboarding/SegmentedRow';
 import { HEREDITARY_CONDITIONS } from '../../constants/onboarding';
 import type { HereditaryCondition } from '../../constants/onboarding';
-import { colors, spacing, typography } from '../../constants/theme';
+import { colors, fonts, spacing, typography } from '../../constants/theme';
+import { tap } from '../ui';
 import type { FamilyEntry, OnsetBucket, Relation } from '../../utils/onboardingApi';
 
 /**
@@ -99,14 +100,16 @@ export default function FamilyEditor({
         {HEREDITARY_CONDITIONS.map((condition) => {
           const on = selected.has(condition);
           return (
-            <TouchableOpacity
+            <Pressable
               key={condition}
-              onPress={() => toggleCondition(condition)}
-              activeOpacity={0.85}
+              onPress={() => {
+                tap();
+                toggleCondition(condition);
+              }}
               accessibilityRole="button"
               accessibilityState={{ selected: on }}
-              accessibilityLabel={`Toggle ${condition} for family history`}
-              style={[styles.card, on && styles.cardSelected]}
+              accessibilityLabel={`${condition} in the family`}
+              style={({ pressed }) => [styles.card, on && styles.cardSelected, pressed && styles.pressed]}
             >
               <Text
                 style={[styles.cardLabel, on && styles.cardLabelSelected]}
@@ -114,7 +117,8 @@ export default function FamilyEditor({
               >
                 {condition}
               </Text>
-            </TouchableOpacity>
+              {on ? <Ionicons name="checkmark-circle" size={20} color={colors.textInverse} /> : null}
+            </Pressable>
           );
         })}
       </View>
@@ -131,21 +135,28 @@ export default function FamilyEditor({
 
             return (
               <View key={entry.condition} style={styles.entryCard}>
-                <TouchableOpacity
-                  style={styles.entryHeader}
+                <Pressable
+                  style={({ pressed }) => [styles.entryHeader, pressed && styles.pressed]}
                   onPress={() => toggleSection(key)}
                   accessibilityRole="button"
                   accessibilityState={{ expanded: open }}
+                  accessibilityLabel={`Details for ${entry.condition}`}
                 >
                   <View style={styles.entryTitleWrap}>
                     <Text style={styles.entryName}>{entry.condition}</Text>
                     {needsDetail ? (
                       <Text style={styles.needsDetail}>Add who</Text>
                     ) : (
-                      <Text style={styles.entryMeta}>
-                        {entry.relations.join(', ')}
-                        {firstDegree && early ? ' · strong signal' : ''}
-                      </Text>
+                      <>
+                        <Text style={styles.entryMeta}>
+                          {entry.relations
+                            .map((r) => RELATION_OPTIONS.find((o) => o.value === r)?.label ?? r)
+                            .join(', ')}
+                        </Text>
+                        {firstDegree && early ? (
+                          <Text style={styles.strongSignal}>Close relative, early onset</Text>
+                        ) : null}
+                      </>
                     )}
                   </View>
                   <Ionicons
@@ -153,7 +164,7 @@ export default function FamilyEditor({
                     size={18}
                     color={colors.textTertiary}
                   />
-                </TouchableOpacity>
+                </Pressable>
 
                 {open ? (
                   <View style={styles.followUp}>
@@ -165,10 +176,18 @@ export default function FamilyEditor({
                       {RELATION_OPTIONS.map((option) => {
                         const on = entry.relations.includes(option.value);
                         return (
-                          <TouchableOpacity
+                          <Pressable
                             key={option.value}
-                            style={[styles.relation, on && styles.relationSelected]}
-                            onPress={() => toggleRelation(entry.condition, option.value)}
+                            style={({ pressed }) => [
+                              styles.relation,
+                              on && styles.relationSelected,
+                              pressed && styles.pressed,
+                            ]}
+                            onPress={() => {
+                              tap();
+                              toggleRelation(entry.condition, option.value);
+                            }}
+                            hitSlop={4}
                             accessibilityRole="button"
                             accessibilityState={{ selected: on }}
                           >
@@ -177,7 +196,7 @@ export default function FamilyEditor({
                             >
                               {option.label}
                             </Text>
-                          </TouchableOpacity>
+                          </Pressable>
                         );
                       })}
                     </View>
@@ -201,31 +220,34 @@ export default function FamilyEditor({
 }
 
 const styles = StyleSheet.create({
+  pressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
+  },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
   },
   card: {
-    width: '48%',
+    width: '48.5%',
     minHeight: 72,
-    paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.lg,
+    padding: spacing.lg,
     marginBottom: spacing.md,
     borderRadius: spacing.cardRadiusLg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
     backgroundColor: colors.surface,
-    alignItems: 'flex-start',
-    justifyContent: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
   cardSelected: {
     backgroundColor: colors.inkSurface,
-    borderColor: colors.inkSurface,
   },
   cardLabel: {
     ...typography.headline,
     color: colors.textPrimary,
+    flexShrink: 1,
   },
   cardLabelSelected: {
     color: colors.textInverse,
@@ -235,13 +257,11 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     ...typography.overline,
-    color: colors.textTertiary,
+    color: colors.textSecondary,
     marginBottom: spacing.md,
   },
   entryCard: {
-    borderRadius: spacing.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    borderRadius: spacing.cardRadiusLg,
     backgroundColor: colors.surface,
     marginBottom: spacing.sm,
     overflow: 'hidden',
@@ -250,7 +270,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: spacing.lg,
+    gap: spacing.sm,
+    minHeight: 56,
+    paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
   },
   entryTitleWrap: {
@@ -262,19 +284,24 @@ const styles = StyleSheet.create({
   },
   entryMeta: {
     ...typography.caption,
-    color: colors.textTertiary,
-    marginTop: spacing.xs,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  strongSignal: {
+    ...typography.caption,
+    fontFamily: fonts.semibold,
+    color: colors.accentText,
+    marginTop: 2,
   },
   needsDetail: {
     ...typography.caption,
     color: colors.warning,
-    marginTop: spacing.xs,
+    marginTop: 2,
   },
   followUp: {
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
-    paddingTop: spacing.lg,
-    borderTopWidth: 1,
+    padding: spacing.lg,
+    paddingBottom: spacing.xs,
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.divider,
   },
   fieldLabel: {
@@ -289,24 +316,23 @@ const styles = StyleSheet.create({
   relationGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.xs,
+    gap: spacing.sm,
     marginBottom: spacing.lg,
   },
   relation: {
-    paddingVertical: spacing.sm,
+    minHeight: 40,
+    justifyContent: 'center',
     paddingHorizontal: spacing.lg,
     borderRadius: spacing.chipRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    backgroundColor: colors.surface,
+    // Sits on a white card, so the resting chip takes the page tint.
+    backgroundColor: colors.background,
   },
   relationSelected: {
     backgroundColor: colors.inkSurface,
-    borderColor: colors.inkSurface,
   },
   relationText: {
-    ...typography.caption,
-    color: colors.textSecondary,
+    ...typography.callout,
+    color: colors.textPrimary,
   },
   relationTextSelected: {
     color: colors.textInverse,

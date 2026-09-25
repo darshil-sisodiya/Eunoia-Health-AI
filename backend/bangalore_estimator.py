@@ -1098,7 +1098,7 @@ def estimate(
     consultation_type: Optional[str] = None,
 ) -> Dict[str, object]:
     """Generate a Bangalore-specific, fee-driven cost estimate.
-
+      
     The return shape is a superset of :func:`cost_estimator.estimate` so the
     API layer can compose the response uniformly. Additional Bangalore-only
     keys (``bangalore_mode``, doctor recommendations, per-hospital fee and

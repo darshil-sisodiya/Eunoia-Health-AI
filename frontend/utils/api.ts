@@ -53,6 +53,10 @@ const resolveBase = (): string | undefined => {
       : explicit;
   }
 
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    // Web has no hostUri; the page's own host is the dev machine.
+    return `http://${window.location.hostname}:${BACKEND_PORT}`;
+  }
   return Platform.OS === 'android' ? `http://10.0.2.2:${BACKEND_PORT}` : undefined;
 };
 
@@ -109,7 +113,15 @@ export const uploadPrescription = async (token: string, imageUri: string): Promi
       type: `image/${fileType}`,
     } as any;
     
-    formData.append('file', file);
+    if (Platform.OS === 'web') {
+      // Browsers can't send React Native's {uri, name, type} shape; the picker
+      // hands back a blob:/data: URI, so read it into a real Blob first.
+      const blob = await (await fetch(imageUri)).blob();
+      const ext = blob.type.split('/')[1] || 'jpg';
+      formData.append('file', blob, `prescription.${ext}`);
+    } else {
+      formData.append('file', file);
+    }
     
     const response = await fetch(`${API_BASE_URL}/api/prescriptions/upload`, {
       method: 'POST',
@@ -121,8 +133,10 @@ export const uploadPrescription = async (token: string, imageUri: string): Promi
     });
     
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || 'Failed to upload prescription');
+      const error = await response.json().catch(() => ({}));
+      // FastAPI validation errors put a list in `detail`, not a string.
+      const detail = typeof error.detail === 'string' ? error.detail : null;
+      throw new Error(detail || 'The prescription could not be uploaded. Try a clearer photo.');
     }
     
     return await response.json();

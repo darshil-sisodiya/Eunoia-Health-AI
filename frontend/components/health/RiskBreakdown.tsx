@@ -1,9 +1,10 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 
-import { colors, spacing, typography } from '../../constants/theme';
+import { colors, fonts, spacing, typography } from '../../constants/theme';
+import { tap } from '../ui';
 import {
   componentBars,
   confidenceLabel,
@@ -20,13 +21,14 @@ import type { AnalyzeRiskResponse, RiskLevel } from '../../utils/onboardingApi';
 export function toneColors(level: RiskLevel | null | undefined) {
   const tone = riskTone(level);
   const fg = {
-    accent: colors.accent,
+    // Low risk reads as good news; marigold is a fill, not a status colour.
+    accent: colors.success,
     warning: colors.warning,
     error: colors.error,
     textPrimary: colors.textPrimary,
   }[tone.fg];
   const bg = {
-    accentMuted: colors.accentMuted,
+    accentMuted: colors.successSoft,
     warningSoft: colors.warningSoft,
     errorSoft: colors.errorSoft,
     backgroundTertiary: colors.backgroundTertiary,
@@ -44,8 +46,8 @@ export function ConfidencePill({ report }: { report: AnalyzeRiskResponse | null 
     <View style={[styles.pill, low && styles.pillLow]}>
       <Ionicons
         name={low ? 'alert-circle-outline' : 'checkmark-circle-outline'}
-        size={14}
-        color={low ? colors.warning : colors.textTertiary}
+        size={16}
+        color={low ? colors.warning : colors.textSecondary}
       />
       <Text style={[styles.pillText, low && styles.pillTextLow]}>{label}</Text>
     </View>
@@ -59,6 +61,8 @@ export function ConfidencePill({ report }: { report: AnalyzeRiskResponse | null 
  * component, so everybody's worst area rendered full-width — a Low-risk user
  * looked maxed out. Each bar is now drawn against that component's published
  * cap, which is why the backend returns the caps at all.
+ *
+ * A bare list with no card or title, so it sits inside the caller's card.
  */
 export function ComponentBars({
   report,
@@ -74,10 +78,17 @@ export function ComponentBars({
   return (
     <View style={styles.bars}>
       {visible.map((bar) => (
-        <View key={bar.id} style={styles.barRow}>
+        <View
+          key={bar.id}
+          accessible
+          accessibilityLabel={`${bar.label}: ${bar.score} of ${bar.cap}${bar.atCap ? ', at the maximum' : ''}`}
+        >
           <View style={styles.barHeader}>
             <Text style={styles.barLabel}>{bar.label}</Text>
-            <Text style={styles.barValue}>{`${bar.score} / ${bar.cap}`}</Text>
+            <Text style={styles.barValue}>
+              <Text style={styles.barScore}>{bar.score}</Text>
+              {` of ${bar.cap}`}
+            </Text>
           </View>
           <View style={styles.barTrack}>
             <View
@@ -94,22 +105,29 @@ export function ComponentBars({
   );
 }
 
-/** Top contributors, each linking to whatever can change it. */
+/** Top contributors, each linking to whatever can change it.
+ *  `linked={false}` renders plain rows, e.g. at the end of onboarding where
+ *  leaving for an edit screen would skip saving the report. */
 export function TopDrivers({
   report,
   limit = 5,
+  linked = true,
 }: {
   report: AnalyzeRiskResponse | null;
   limit?: number;
+  linked?: boolean;
 }) {
   const drivers = topDrivers(report, limit);
   if (drivers.length === 0) return null;
 
   return (
-    <View style={styles.block}>
-      <Text style={styles.blockTitle}>What is driving this</Text>
-      {drivers.map((driver) => {
-        const link = linkForFactor(driver.dimension);
+    <View style={styles.card}>
+      <Text style={styles.cardTitle} accessibilityRole="header">
+        What’s driving your score
+      </Text>
+      <Text style={styles.cardCaption}>Points each one adds to your risk, largest first.</Text>
+      {drivers.map((driver, index) => {
+        const link = linked ? linkForFactor(driver.dimension) : null;
         const unassessed = driver.kind === 'unassessed';
         const body = (
           <>
@@ -122,7 +140,7 @@ export function TopDrivers({
               ) : null}
               {driver.multiplier && driver.multiplier !== 1 ? (
                 <Text style={styles.driverMultiplier}>
-                  {`severity multiplier x${driver.multiplier}`}
+                  {`Severity multiplier ×${driver.multiplier}`}
                 </Text>
               ) : null}
             </View>
@@ -131,24 +149,36 @@ export function TopDrivers({
                 {`+${driver.delta}`}
               </Text>
               {link ? (
-                <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+                <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
               ) : null}
             </View>
           </>
         );
 
         return link ? (
-          <TouchableOpacity
+          <Pressable
             key={driver.dimension}
-            style={styles.driverRow}
-            onPress={() => router.push(link as never)}
+            style={({ pressed }) => [
+              styles.driverRow,
+              index > 0 && styles.rowDivider,
+              pressed && styles.pressed,
+            ]}
+            onPress={() => {
+              tap();
+              router.push(link as never);
+            }}
             accessibilityRole="button"
-            accessibilityLabel={`${driver.label}. Open to act on this.`}
+            accessibilityLabel={`${driver.label}, adds ${driver.delta}. Open to act on this.`}
           >
             {body}
-          </TouchableOpacity>
+          </Pressable>
         ) : (
-          <View key={driver.dimension} style={styles.driverRow}>
+          <View
+            key={driver.dimension}
+            style={[styles.driverRow, index > 0 && styles.rowDivider]}
+            accessible
+            accessibilityLabel={`${driver.label}, adds ${driver.delta}`}
+          >
             {body}
           </View>
         );
@@ -163,13 +193,19 @@ export function SubScores({ report }: { report: AnalyzeRiskResponse | null }) {
   if (subscores.length === 0) return null;
 
   return (
-    <View style={styles.block}>
-      <Text style={styles.blockTitle}>Recognised screening scores</Text>
+    <View style={styles.card}>
+      <Text style={styles.cardTitle} accessibilityRole="header">
+        Screening scores
+      </Text>
+      <Text style={styles.cardCaption}>Standard questionnaires, each on its own scale.</Text>
       {subscores.map((sub) => (
         <View key={sub.id} style={styles.subCard}>
           <View style={styles.subHeader}>
             <Text style={styles.subLabel}>{sub.label}</Text>
-            <Text style={styles.subScore}>{`${sub.score} / ${sub.max}`}</Text>
+            <Text style={styles.subScore}>
+              {sub.score}
+              <Text style={styles.subMax}>{` of ${sub.max}`}</Text>
+            </Text>
           </View>
           <Text style={styles.subBand}>{sub.band}</Text>
           <Text style={styles.subDetail}>{sub.detail}</Text>
@@ -192,37 +228,52 @@ export function GetCheckedCard({ report }: { report: AnalyzeRiskResponse | null 
   if (missing.length === 0 && unassessed.length === 0) return null;
 
   return (
-    <View style={styles.block}>
-      <Text style={styles.blockTitle}>Worth getting checked</Text>
-      <Text style={styles.blockCaption}>
-        We have not assumed these are fine — they are simply not known yet.
+    <View style={styles.card}>
+      <Text style={styles.cardTitle} accessibilityRole="header">
+        Worth getting checked
       </Text>
-      {missing.map((item) => (
-        <TouchableOpacity
+      <Text style={styles.cardCaption}>
+        We have not assumed these are fine. They are simply not known yet.
+      </Text>
+      {missing.map((item, index) => (
+        <Pressable
           key={item.id}
-          style={styles.checkRow}
-          onPress={() => router.push('/profile/edit/vitals' as never)}
+          style={({ pressed }) => [
+            styles.checkRow,
+            index > 0 && styles.rowDivider,
+            pressed && styles.pressed,
+          ]}
+          onPress={() => {
+            tap();
+            router.push('/profile/edit/vitals' as never);
+          }}
           accessibilityRole="button"
           accessibilityLabel={`Record ${item.label}`}
         >
-          <Ionicons name="add-circle-outline" size={18} color={colors.warning} />
+          <View style={styles.checkIcon}>
+            <Ionicons name="add" size={18} color={colors.warning} />
+          </View>
           <Text style={styles.checkLabel}>{item.label}</Text>
-          <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
-        </TouchableOpacity>
+          <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+        </Pressable>
       ))}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  pressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
+  },
   pill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs,
-    paddingVertical: spacing.xs,
+    gap: 6,
+    paddingVertical: 6,
     paddingHorizontal: spacing.md,
     borderRadius: spacing.chipRadius,
-    backgroundColor: colors.backgroundSecondary,
+    backgroundColor: colors.background,
     alignSelf: 'flex-start',
   },
   pillLow: {
@@ -236,60 +287,78 @@ const styles = StyleSheet.create({
   pillTextLow: {
     color: colors.warning,
   },
-  bars: {
-    marginTop: spacing.md,
+
+  // White card shell for the titled blocks. No outer margin: the caller
+  // stacks them with a 12pt gap.
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: spacing.cardRadiusLg,
+    padding: spacing.xl,
   },
-  barRow: {
-    marginBottom: spacing.md,
+  cardTitle: {
+    ...typography.title,
+    color: colors.textPrimary,
+  },
+  cardCaption: {
+    ...typography.caption,
+    fontFamily: fonts.regular,
+    color: colors.textTertiary,
+    marginTop: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  rowDivider: {
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+  },
+
+  // Component bars
+  bars: {
+    gap: spacing.lg,
   },
   barHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'baseline',
-    marginBottom: spacing.xs,
+    gap: spacing.md,
+    marginBottom: spacing.sm,
   },
   barLabel: {
-    ...typography.caption,
-    color: colors.textSecondary,
+    ...typography.callout,
+    color: colors.textPrimary,
+    flexShrink: 1,
   },
   barValue: {
     ...typography.caption,
+    fontFamily: fonts.regular,
     color: colors.textTertiary,
+    fontVariant: ['tabular-nums'],
+  },
+  barScore: {
+    fontFamily: fonts.semibold,
+    color: colors.textPrimary,
   },
   barTrack: {
-    height: 6,
-    borderRadius: 3,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: colors.backgroundTertiary,
     overflow: 'hidden',
   },
   barFill: {
     height: '100%',
-    borderRadius: 3,
+    borderRadius: 4,
     backgroundColor: colors.textPrimary,
   },
   barFillCapped: {
     backgroundColor: colors.error,
   },
-  block: {
-    marginTop: spacing.xxl,
-  },
-  blockTitle: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: spacing.sm,
-  },
-  blockCaption: {
-    ...typography.caption,
-    color: colors.textTertiary,
-    marginBottom: spacing.md,
-  },
+
+  // Drivers
   driverRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    minHeight: 56,
     paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
     gap: spacing.md,
   },
   driverText: {
@@ -303,9 +372,10 @@ const styles = StyleSheet.create({
     color: colors.warning,
   },
   driverExplanation: {
-    ...typography.caption,
-    color: colors.textTertiary,
-    marginTop: spacing.xs,
+    ...typography.callout,
+    fontFamily: fonts.regular,
+    color: colors.textSecondary,
+    marginTop: 2,
   },
   driverMultiplier: {
     ...typography.caption,
@@ -318,24 +388,26 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   driverDelta: {
-    ...typography.numeric,
+    ...typography.title,
     color: colors.textPrimary,
+    fontVariant: ['tabular-nums'],
   },
   driverDeltaUnassessed: {
     color: colors.warning,
   },
+
+  // Screening scores
   subCard: {
     padding: spacing.lg,
     borderRadius: spacing.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    backgroundColor: colors.surface,
-    marginBottom: spacing.sm,
+    backgroundColor: colors.background,
+    marginTop: spacing.sm,
   },
   subHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'baseline',
+    gap: spacing.md,
   },
   subLabel: {
     ...typography.headline,
@@ -343,26 +415,42 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   subScore: {
-    ...typography.numeric,
+    ...typography.title,
     color: colors.textPrimary,
   },
-  subBand: {
+  subMax: {
     ...typography.caption,
+    fontFamily: fonts.regular,
+    color: colors.textTertiary,
+  },
+  subBand: {
+    ...typography.callout,
+    fontFamily: fonts.semibold,
     color: colors.textSecondary,
     marginTop: spacing.xs,
   },
   subDetail: {
-    ...typography.caption,
-    color: colors.textTertiary,
+    ...typography.callout,
+    fontFamily: fonts.regular,
+    color: colors.textSecondary,
     marginTop: spacing.xs,
   },
+
+  // Get checked
   checkRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
+    minHeight: 56,
+    paddingVertical: spacing.sm,
+  },
+  checkIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.warningSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   checkLabel: {
     ...typography.bodyMedium,

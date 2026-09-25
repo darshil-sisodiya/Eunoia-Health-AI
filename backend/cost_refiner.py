@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # Bumped from 9 → 18 s after observing real-world ``gemini-1.5-flash``
 # cold latency hovering around 10-14 s for structured-JSON outputs. The
 # rest of the codebase already tolerates this band for AI calls
-# (``gemini_insights.GEMINI_TIMEOUT_SECONDS = 20``).
+# (``gemini_insights.GEMINI_TIMEOUT_SECONDS``).
 GEMINI_TIMEOUT_SECONDS: int = 18
 
 # Hard ceiling on reasoning bullets surfaced to the UI. Keeps the response

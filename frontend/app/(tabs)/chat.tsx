@@ -4,23 +4,33 @@ import {
   Text,
   StyleSheet,
   FlatList,
+  ScrollView,
   TextInput,
-  TouchableOpacity,
+  Pressable,
   Platform,
   ActivityIndicator,
   Keyboard,
   useWindowDimensions,
   type KeyboardEvent,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../contexts/AuthContext';
 import axios from 'axios';
 import { API_BASE_URL } from '../../utils/api';
 import { MarkdownText } from '../../components/MarkdownText';
-import { colors, spacing, shadows, typography } from '../../constants/theme';
+import { tap } from '../../components/ui';
+import { colors, fonts, spacing, typography } from '../../constants/theme';
 
 const BACKEND_URL = API_BASE_URL;
+
+const SUGGESTIONS = [
+  'Tell me about my health profile',
+  'How can I improve my sleep?',
+  'Ways to reduce stress naturally',
+  'Can I take my medicines together?',
+];
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -39,7 +49,7 @@ interface PrescriptionItem {
 
 export default function Chat() {
   const { token } = useAuth();
-  const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
   const { height: windowHeight } = useWindowDimensions();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
@@ -48,18 +58,18 @@ export default function Chat() {
   const [inputFocused, setInputFocused] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const [prescriptions, setPrescriptions] = useState<PrescriptionItem[]>([]);
-  const [composerHeight, setComposerHeight] = useState(80);
+  const [composerHeight, setComposerHeight] = useState(72);
   const [keyboardFrame, setKeyboardFrame] = useState({
     visible: false,
     screenY: 0,
     height: 0,
   });
 
-  const tabBarBottomOffset =
-    Platform.OS === 'ios'
-      ? Math.max(insets.bottom, 12) + 4
-      : Math.max(insets.bottom, 8) + 8;
-  const tabBarClearance = tabBarBottomOffset + 64;
+  // The screen ends at the top of the docked tab bar. With the keyboard
+  // open, the composer has to rise by however much of the keyboard reaches
+  // above that edge. iOS keeps the tab bar mounted under the keyboard, so
+  // its height is already "clear"; Android hides it (tabBarHideOnKeyboard)
+  // and the screen then extends to the window bottom.
   const keyboardTop =
     keyboardFrame.screenY > 0
       ? keyboardFrame.screenY
@@ -67,11 +77,15 @@ export default function Chat() {
   const keyboardOverlap = keyboardFrame.visible
     ? Math.max(0, Math.min(keyboardFrame.height, windowHeight - keyboardTop))
     : 0;
-  const composerBottom = keyboardFrame.visible ? keyboardOverlap : tabBarClearance;
+  const composerBottom = keyboardFrame.visible
+    ? Math.max(0, keyboardOverlap - (Platform.OS === 'ios' ? tabBarHeight : 0))
+    : 0;
   const reservedComposerSpace = composerHeight + composerBottom + spacing.lg;
+  const canSend = !!inputText.trim() && !isSending;
 
   const syncKeyboardMetrics = () => {
-    const metrics = Keyboard.metrics();
+    // Not implemented on react-native-web.
+    const metrics = typeof Keyboard.metrics === 'function' ? Keyboard.metrics() : undefined;
     if (!metrics) return;
     setKeyboardFrame({
       visible: true,
@@ -111,9 +125,10 @@ export default function Chat() {
     };
   }, []);
 
+  // Wait for the stored token; on a cold start it is null at mount.
   useEffect(() => {
-    loadChatHistory();
-  }, []);
+    if (token) loadChatHistory();
+  }, [token]);
 
   useEffect(() => {
     if (messages.length > 0 && !isLoading) {
@@ -144,7 +159,7 @@ export default function Chat() {
       const response = await axios.get(`${BACKEND_URL}/api/chat/history`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      setMessages(response.data.messages);
+      setMessages(response.data?.messages ?? []);
       try {
         const presRes = await axios.get(`${BACKEND_URL}/api/prescriptions/history?limit=5`, {
           headers: { Authorization: `Bearer ${token}` },
@@ -166,10 +181,11 @@ export default function Chat() {
     }
   };
 
-  const handleSend = async () => {
-    if (!inputText.trim() || isSending) return;
-    const userMessage = inputText.trim();
-    setInputText('');
+  // `text` lets a suggestion chip send straight away; otherwise the draft is sent.
+  const handleSend = async (text?: string) => {
+    const userMessage = (text ?? inputText).trim();
+    if (!userMessage || isSending) return;
+    if (text === undefined) setInputText('');
     const tempUserMsg: ChatMessage = {
       role: 'user',
       content: userMessage,
@@ -191,7 +207,7 @@ export default function Chat() {
         ...prev,
         {
           role: 'assistant',
-          content: 'Sorry, I encountered an error. Please try again.',
+          content: 'That message did not go through. Check your connection and send it again.',
           timestamp: new Date().toISOString(),
         },
       ]);
@@ -200,36 +216,18 @@ export default function Chat() {
     }
   };
 
-  const renderMessage = ({ item, index }: { item: ChatMessage; index: number }) => {
-    const isUser = item.role === 'user';
-    const showAvatar = index === 0 || messages[index - 1].role !== item.role;
-
-    return (
-      <View style={[styles.messageContainer, isUser ? styles.userMessageContainer : styles.aiMessageContainer]}>
-        {showAvatar && !isUser && (
-          <View style={styles.aiAvatar}>
-            <Ionicons name="sparkles" size={14} color={colors.textInverse} />
-          </View>
-        )}
-        {!showAvatar && !isUser && <View style={styles.avatarSpacer} />}
-
-        <View style={[styles.messageBubble, isUser ? styles.userBubble : styles.aiBubble]}>
-          {isUser ? (
-            <Text style={styles.userText}>{item.content}</Text>
-          ) : (
-            <MarkdownText content={item.content} variant="light" />
-          )}
-        </View>
-
-        {showAvatar && isUser && (
-          <View style={styles.userAvatar}>
-            <Ionicons name="person" size={14} color={colors.textPrimary} />
-          </View>
-        )}
-        {!showAvatar && isUser && <View style={styles.avatarSpacer} />}
+  const renderMessage = ({ item }: { item: ChatMessage }) =>
+    item.role === 'user' ? (
+      <View style={[styles.bubble, styles.userBubble]}>
+        <Text style={styles.userText} selectable>
+          {item.content}
+        </Text>
+      </View>
+    ) : (
+      <View style={[styles.bubble, styles.aiBubble]}>
+        <MarkdownText content={item.content} variant="light" />
       </View>
     );
-  };
 
   if (isLoading) {
     return (
@@ -242,154 +240,159 @@ export default function Chat() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <View style={styles.container}>
-        {/* ── Editorial header ─────────────────────────────── */}
+        {/* ── Header ───────────────────────────────────────── */}
         <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <Text style={styles.headerEyebrow}>EUNOIA · ASSISTANT</Text>
-            <Text style={styles.headerTitle}>Health AI</Text>
-          </View>
+          <Text style={styles.headerTitle} accessibilityRole="header">
+            Ask Eunoia
+          </Text>
+          <Text style={styles.headerSubtitle}>Answers that take your health profile into account.</Text>
         </View>
-
-        <View style={styles.headerRule} />
 
         {/* ── Prescription chips ───────────────────────────── */}
         {prescriptions.length > 0 && (
           <View style={styles.prescriptionsBar}>
-            <Text style={styles.prescriptionsLabel}>Reference</Text>
+            <Text style={styles.prescriptionsLabel}>Ask about a prescription</Text>
             <FlatList
               horizontal
               data={prescriptions}
               keyExtractor={(item) => item.id}
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.prescriptionsList}
+              contentContainerStyle={styles.chipRow}
+              keyboardShouldPersistTaps="handled"
               renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.prescriptionChip}
-                  onPress={() =>
+                <Pressable
+                  style={({ pressed }) => [styles.chip, pressed && styles.pressed]}
+                  onPress={() => {
+                    tap();
                     setInputText((prev) =>
                       prev
                         ? `${prev}\n\nReference: ${item.medication_name}`
                         : `Reference my prescription: ${item.medication_name}`
-                    )
-                  }
-                  activeOpacity={0.85}
+                    );
+                  }}
+                  hitSlop={4}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Add ${item.medication_name} to your message`}
                 >
-                  <View style={styles.prescriptionChipDot} />
-                  <Text style={styles.prescriptionChipText} numberOfLines={1}>
+                  <Ionicons name="document-text-outline" size={16} color={colors.textSecondary} />
+                  <Text style={styles.chipText} numberOfLines={1}>
                     {item.medication_name}
                   </Text>
-                </TouchableOpacity>
+                </Pressable>
               )}
             />
           </View>
         )}
 
         {/* ── Chat body ────────────────────────────────────── */}
-          <View style={styles.chatWrapper}>
-            {messages.length === 0 ? (
-              <View
-                style={[
-                  styles.emptyContainer,
-                  { paddingBottom: reservedComposerSpace },
-                ]}
-              >
-                <View style={styles.emptyIconWrap}>
-                  <Ionicons name="sparkles-outline" size={28} color={colors.textPrimary} />
-                </View>
-                <Text style={styles.emptyEyebrow}>NEW CONVERSATION</Text>
-                <Text style={styles.emptyText}>How can I help today?</Text>
-                <Text style={styles.emptySubtext}>
-                  Ask anything about your health, prescriptions, or wellness routine.
-                </Text>
-                <View style={styles.examplesContainer}>
-                  {[
-                    { text: 'Tell me about my health profile', icon: 'person-circle-outline' as const },
-                    { text: 'How can I improve my sleep?', icon: 'moon-outline' as const },
-                    { text: 'Reduce stress naturally', icon: 'leaf-outline' as const },
-                  ].map((item) => (
-                    <TouchableOpacity
-                      key={item.text}
-                      style={styles.exampleCard}
-                      onPress={() => setInputText(item.text)}
-                      activeOpacity={0.85}
-                    >
-                      <View style={styles.exampleIcon}>
-                        <Ionicons name={item.icon} size={16} color={colors.textPrimary} />
-                      </View>
-                      <Text style={styles.exampleText}>{item.text}</Text>
-                      <Ionicons name="arrow-forward" size={14} color={colors.textTertiary} />
-                    </TouchableOpacity>
-                  ))}
-                </View>
+        <View style={styles.chatWrapper}>
+          {messages.length === 0 ? (
+            <ScrollView
+              contentContainerStyle={[styles.emptyContainer, { paddingBottom: reservedComposerSpace }]}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              showsVerticalScrollIndicator={false}
+            >
+              <Text style={styles.emptyTitle}>What would you like to know?</Text>
+              <Text style={styles.emptySubtext}>
+                Ask about symptoms, your prescriptions or your daily routine. Try one of these to start.
+              </Text>
+              <View style={styles.suggestions}>
+                {SUGGESTIONS.map((text) => (
+                  <Pressable
+                    key={text}
+                    style={({ pressed }) => [styles.suggestion, pressed && styles.pressed]}
+                    onPress={() => {
+                      tap();
+                      handleSend(text);
+                    }}
+                    disabled={isSending}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Ask: ${text}`}
+                  >
+                    <Text style={styles.suggestionText}>{text}</Text>
+                  </Pressable>
+                ))}
               </View>
-            ) : (
-              <FlatList
-                ref={flatListRef}
-                data={messages}
-                renderItem={renderMessage}
-                keyExtractor={(_, index) => index.toString()}
-                contentContainerStyle={[
-                  styles.chatContent,
-                  { paddingBottom: reservedComposerSpace },
-                ]}
-                onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-                onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
-                keyboardDismissMode="on-drag"
-                keyboardShouldPersistTaps="handled"
-              />
-            )}
-          </View>
+            </ScrollView>
+          ) : (
+            <FlatList
+              ref={flatListRef}
+              data={messages}
+              renderItem={renderMessage}
+              keyExtractor={(_, index) => index.toString()}
+              contentContainerStyle={[styles.chatContent, { paddingBottom: reservedComposerSpace }]}
+              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+              onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
+              keyboardDismissMode="on-drag"
+              keyboardShouldPersistTaps="handled"
+              ListFooterComponent={
+                isSending ? (
+                  <View style={[styles.bubble, styles.aiBubble, styles.thinking]} accessibilityLiveRegion="polite">
+                    <ActivityIndicator size="small" color={colors.textTertiary} />
+                    <Text style={styles.thinkingText}>Eunoia is thinking…</Text>
+                  </View>
+                ) : null
+              }
+            />
+          )}
+        </View>
 
-          {/* ── Input ─────────────────────────────────────── */}
-          <View
-            onLayout={(event) => {
-              const nextHeight = Math.ceil(event.nativeEvent.layout.height);
-              setComposerHeight((current) =>
-                Math.abs(current - nextHeight) > 1 ? nextHeight : current,
-              );
-            }}
-            style={[
-              styles.inputOuter,
-              { bottom: composerBottom },
-            ]}
-          >
-            <View style={[styles.inputContainer, inputFocused && styles.inputContainerFocused]}>
-              <TextInput
-                style={styles.input}
-                placeholder="Message Health AI…"
-                placeholderTextColor={colors.textMuted}
-                value={inputText}
-                onChangeText={setInputText}
-                multiline
-                maxLength={500}
-                editable={!isSending}
-                onFocus={() => {
-                  setInputFocused(true);
-                  syncKeyboardMetrics();
-                }}
-                onBlur={() => setInputFocused(false)}
-              />
-              <TouchableOpacity
-                onPress={handleSend}
-                disabled={!inputText.trim() || isSending}
-                activeOpacity={0.9}
-                style={[
-                  styles.sendButton,
-                  (!inputText.trim() || isSending) && styles.sendButtonDisabled,
-                ]}
-              >
-                {isSending ? (
-                  <ActivityIndicator size="small" color={colors.textInverse} />
-                ) : (
-                  <Ionicons
-                    name="arrow-up"
-                    size={18}
-                    color={!inputText.trim() ? colors.textMuted : colors.textInverse}
-                  />
-                )}
-              </TouchableOpacity>
-            </View>
+        {/* ── Composer ──────────────────────────────────── */}
+        <View
+          onLayout={(event) => {
+            const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+            setComposerHeight((current) =>
+              Math.abs(current - nextHeight) > 1 ? nextHeight : current,
+            );
+          }}
+          style={[styles.composer, { bottom: composerBottom }]}
+        >
+          <View style={[styles.inputContainer, inputFocused && styles.inputContainerFocused]}>
+            <TextInput
+              style={styles.input}
+              placeholder="Ask about your health…"
+              placeholderTextColor={colors.textMuted}
+              value={inputText}
+              onChangeText={setInputText}
+              multiline
+              maxLength={500}
+              editable={!isSending}
+              accessibilityLabel="Message"
+              onFocus={() => {
+                setInputFocused(true);
+                syncKeyboardMetrics();
+              }}
+              onBlur={() => setInputFocused(false)}
+            />
+            <Pressable
+              onPress={() => {
+                tap();
+                handleSend();
+              }}
+              disabled={!canSend}
+              hitSlop={4}
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
+              accessibilityState={{ disabled: !canSend, busy: isSending }}
+              style={({ pressed }) => [
+                styles.sendButton,
+                !canSend && styles.sendButtonDisabled,
+                pressed && styles.pressed,
+              ]}
+            >
+              {isSending ? (
+                <ActivityIndicator size="small" color={colors.textTertiary} />
+              ) : (
+                <Ionicons
+                  name="arrow-up"
+                  size={20}
+                  color={canSend ? colors.textInverse : colors.textMuted}
+                />
+              )}
+            </Pressable>
           </View>
+        </View>
       </View>
     </SafeAreaView>
   );
@@ -411,70 +414,57 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  pressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.99 }],
+  },
 
   // ─── Header ──────────────────────────────────────────────
   header: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
     paddingHorizontal: spacing.screenPadding,
     paddingTop: spacing.lg,
-    paddingBottom: spacing.lg,
-  },
-  headerLeft: {},
-  headerEyebrow: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: 4,
+    paddingBottom: spacing.md,
   },
   headerTitle: {
     ...typography.largeTitle,
     color: colors.textPrimary,
   },
-  headerRule: {
-    height: 1,
-    backgroundColor: colors.divider,
-    marginHorizontal: spacing.screenPadding,
+  headerSubtitle: {
+    ...typography.callout,
+    fontFamily: fonts.regular,
+    color: colors.textSecondary,
+    marginTop: 2,
   },
 
   // ─── Prescription chips ──────────────────────────────────
   prescriptionsBar: {
-    paddingHorizontal: spacing.screenPadding,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
+    paddingBottom: spacing.sm,
   },
   prescriptionsLabel: {
-    ...typography.overline,
+    ...typography.caption,
     color: colors.textTertiary,
-    marginBottom: 10,
+    paddingHorizontal: spacing.screenPadding,
+    marginBottom: spacing.sm,
   },
-  prescriptionsList: {
+  chipRow: {
     gap: spacing.sm,
+    paddingHorizontal: spacing.screenPadding,
   },
-  prescriptionChip: {
+  chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    minHeight: 40,
+    paddingHorizontal: 14,
     borderRadius: spacing.chipRadius,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    gap: 8,
+    gap: 6,
     maxWidth: 220,
   },
-  prescriptionChipDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: colors.accent,
-  },
-  prescriptionChipText: {
+  chipText: {
     ...typography.caption,
-    fontWeight: '600',
+    fontFamily: fonts.semibold,
     color: colors.textPrimary,
+    flexShrink: 1,
   },
 
   // ─── Chat body ───────────────────────────────────────────
@@ -483,173 +473,120 @@ const styles = StyleSheet.create({
   },
   chatContent: {
     paddingHorizontal: spacing.screenPadding,
-    paddingTop: spacing.lg,
+    paddingTop: spacing.md,
     flexGrow: 1,
   },
   emptyContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    flexGrow: 1,
+    justifyContent: 'flex-end',
     paddingHorizontal: spacing.screenPadding,
-    paddingVertical: spacing.xxxl,
+    paddingTop: spacing.xxl,
   },
-  emptyIconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.xl,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    ...shadows.sm,
-  },
-  emptyEyebrow: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: 10,
-  },
-  emptyText: {
+  emptyTitle: {
     ...typography.title,
     color: colors.textPrimary,
-    textAlign: 'center',
   },
   emptySubtext: {
     ...typography.body,
-    color: colors.textTertiary,
-    marginTop: spacing.sm,
-    marginBottom: spacing.xxxl,
-    textAlign: 'center',
-    maxWidth: 280,
+    color: colors.textSecondary,
+    marginTop: spacing.xs,
+    marginBottom: spacing.xl,
   },
-  examplesContainer: {
-    width: '100%',
-    gap: spacing.md,
-  },
-  exampleCard: {
+  suggestions: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: spacing.cardRadiusLg,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    gap: spacing.md,
+    flexWrap: 'wrap',
+    gap: spacing.sm,
   },
-  exampleIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 9,
-    backgroundColor: colors.backgroundSecondary,
-    alignItems: 'center',
+  suggestion: {
+    minHeight: 44,
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 10,
+    borderRadius: spacing.chipRadius,
+    backgroundColor: colors.surface,
   },
-  exampleText: {
-    flex: 1,
+  suggestionText: {
     ...typography.callout,
     color: colors.textPrimary,
   },
 
   // ─── Messages ────────────────────────────────────────────
-  messageContainer: {
-    flexDirection: 'row',
+  bubble: {
+    borderRadius: 20,
     marginBottom: spacing.md,
-    alignItems: 'flex-end',
-  },
-  userMessageContainer: {
-    justifyContent: 'flex-end',
-  },
-  aiMessageContainer: {
-    justifyContent: 'flex-start',
-  },
-  aiAvatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: spacing.sm,
-    backgroundColor: colors.inkSurface,
-  },
-  userAvatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: spacing.sm,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  avatarSpacer: {
-    width: 28,
-    marginHorizontal: spacing.sm,
-  },
-  messageBubble: {
-    maxWidth: '78%',
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
   },
   userBubble: {
+    alignSelf: 'flex-end',
+    maxWidth: '82%',
     backgroundColor: colors.inkSurface,
     borderBottomRightRadius: 6,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 10,
   },
   aiBubble: {
+    alignSelf: 'flex-start',
+    maxWidth: '92%',
     backgroundColor: colors.surface,
     borderBottomLeftRadius: 6,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
+    paddingHorizontal: spacing.lg,
+    // Markdown paragraphs carry their own 10px bottom margin.
+    paddingTop: spacing.md,
+    paddingBottom: 2,
   },
   userText: {
-    color: colors.textInverse,
     ...typography.body,
+    color: colors.textInverse,
+  },
+  thinking: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingBottom: spacing.md,
+  },
+  thinkingText: {
+    ...typography.callout,
+    color: colors.textTertiary,
   },
 
-  // ─── Input ───────────────────────────────────────────────
-  inputOuter: {
+  // ─── Composer ────────────────────────────────────────────
+  composer: {
     position: 'absolute',
     left: 0,
     right: 0,
     paddingHorizontal: spacing.screenPadding,
-    paddingTop: spacing.md,
+    paddingTop: spacing.sm,
     paddingBottom: spacing.md,
     backgroundColor: colors.background,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    paddingLeft: 16,
+    paddingLeft: spacing.lg,
     paddingRight: 6,
     paddingVertical: 6,
-    borderRadius: 22,
+    borderRadius: 24,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    ...shadows.sm,
+    borderWidth: 1.5,
+    borderColor: colors.surface,
   },
   inputContainerFocused: {
     borderColor: colors.textPrimary,
   },
   input: {
     flex: 1,
-    backgroundColor: 'transparent',
     paddingHorizontal: 0,
-    paddingVertical: 10,
+    paddingTop: 8,
+    paddingBottom: 8,
     color: colors.textPrimary,
     ...typography.body,
     maxHeight: 120,
-    marginRight: 10,
-  },
+    marginRight: spacing.sm,
+    outlineStyle: 'none',
+  } as any,
   sendButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.inkSurface,

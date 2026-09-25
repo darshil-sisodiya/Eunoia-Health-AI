@@ -2,6 +2,8 @@
 
 Eunoia is a full-stack preventive health assistant built as an Expo React Native mobile app with a FastAPI backend. It supports account creation, health onboarding, deterministic risk scoring, Gemini-powered preventive insights, prescription image analysis, AI chat, step and meditation tracking, health-report PDF generation, and a Karnataka-focused medical cost estimator.
 
+> **Prescription feature guide:** See [`PRESCRIPTION_VISION_README.md`](./PRESCRIPTION_VISION_README.md) for the complete capture, Gemini Vision OCR, medication-analysis, API, database, setup, and troubleshooting walkthrough.
+
 This repository is a monorepo:
 
 ```text

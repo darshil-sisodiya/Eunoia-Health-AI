@@ -1,39 +1,35 @@
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
+import React, { useRef, useState } from 'react';
+import { View, Text, StyleSheet, TextInput, Pressable } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../contexts/AuthContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import KeyboardAwareScreenScrollView from '../../components/KeyboardAwareScreenScrollView';
-import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, shadows, typography } from '../../constants/theme';
+import { BrandMark, Button, Notice, TextField } from '../../components/ui';
+import { colors, fonts, spacing, typography } from '../../constants/theme';
 
 export default function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [focused, setFocused] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const passwordRef = useRef<TextInput>(null);
   const { login } = useAuth();
   const router = useRouter();
 
+  const canSubmit = username.trim().length > 0 && password.length > 0;
+
   const handleLogin = async () => {
-    if (!username.trim() || !password.trim()) {
-      Alert.alert('Missing fields', 'Please fill in all fields');
+    if (!canSubmit) {
+      setError('Enter your username and password.');
       return;
     }
+    setError(null);
     setIsLoading(true);
     try {
       await login(username.trim(), password);
       router.replace('/(tabs)/home');
-    } catch (error: any) {
-      Alert.alert('Login failed', error.message);
+    } catch (e: any) {
+      setError(e?.message || 'Could not sign in. Check your details and try again.');
     } finally {
       setIsLoading(false);
     }
@@ -41,96 +37,72 @@ export default function Login() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAwareScreenScrollView
-        contentContainerStyle={styles.scrollContent}
-      >
-        {/* ── Editorial header ─────────────────────────────── */}
-        <View style={styles.header}>
-          <View style={styles.brandRow}>
-            <View style={styles.brandDot} />
-            <Text style={styles.brandText}>EUNOIA</Text>
-          </View>
+      <KeyboardAwareScreenScrollView contentContainerStyle={styles.scrollContent}>
+        <BrandMark />
 
-          <Text style={styles.eyebrow}>Sign in</Text>
-          <Text style={styles.title}>Welcome{"\n"}back.</Text>
+        <View style={styles.header}>
+          <Text style={styles.title} accessibilityRole="header">
+            Welcome back
+          </Text>
           <Text style={styles.subtitle}>
-            Continue your health journey with intelligent, personal insights.
+            Sign in to see today’s steps, your health risk score and your saved prescriptions.
           </Text>
         </View>
 
-        {/* ── Form ─────────────────────────────────────────── */}
         <View style={styles.form}>
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Username</Text>
-            <View style={[styles.inputContainer, focused === 'username' && styles.inputContainerFocused]}>
-              <Ionicons name="person-outline" size={18} color={colors.textTertiary} />
-              <TextInput
-                style={styles.input}
-                placeholder="yourname"
-                placeholderTextColor={colors.textMuted}
-                value={username}
-                onChangeText={setUsername}
-                autoCapitalize="none"
-                editable={!isLoading}
-                onFocus={() => setFocused('username')}
-                onBlur={() => setFocused(null)}
-              />
-            </View>
-          </View>
+          <TextField
+            label="Username"
+            icon="person-outline"
+            placeholder="Your username"
+            value={username}
+            onChangeText={(t) => {
+              setUsername(t);
+              if (error) setError(null);
+            }}
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoComplete="username"
+            textContentType="username"
+            returnKeyType="next"
+            onSubmitEditing={() => passwordRef.current?.focus()}
+            submitBehavior="submit"
+            editable={!isLoading}
+          />
+          <TextField
+            ref={passwordRef}
+            label="Password"
+            icon="lock-closed-outline"
+            placeholder="Your password"
+            password
+            value={password}
+            onChangeText={(t) => {
+              setPassword(t);
+              if (error) setError(null);
+            }}
+            autoCapitalize="none"
+            autoComplete="current-password"
+            textContentType="password"
+            returnKeyType="go"
+            onSubmitEditing={handleLogin}
+            editable={!isLoading}
+          />
 
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Password</Text>
-            <View style={[styles.inputContainer, focused === 'password' && styles.inputContainerFocused]}>
-              <Ionicons name="lock-closed-outline" size={18} color={colors.textTertiary} />
-              <TextInput
-                style={styles.input}
-                placeholder="••••••••"
-                placeholderTextColor={colors.textMuted}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                editable={!isLoading}
-                onFocus={() => setFocused('password')}
-                onBlur={() => setFocused(null)}
-              />
-            </View>
-          </View>
+          {error ? <Notice>{error}</Notice> : null}
 
-          <TouchableOpacity
-            style={[styles.primaryButton, isLoading && styles.buttonDisabled]}
-            onPress={handleLogin}
-            disabled={isLoading}
-            activeOpacity={0.9}
-          >
-            {isLoading ? (
-              <ActivityIndicator color={colors.textInverse} size="small" />
-            ) : (
-              <>
-                <Text style={styles.primaryButtonText}>Sign in</Text>
-                <Ionicons name="arrow-forward" size={18} color={colors.textInverse} />
-              </>
-            )}
-          </TouchableOpacity>
-
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>NEW HERE</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          <TouchableOpacity
-            style={styles.secondaryButton}
-            onPress={() => router.push('/auth/register')}
-            disabled={isLoading}
-            activeOpacity={0.9}
-          >
-            <Text style={styles.secondaryButtonText}>Create an account</Text>
-          </TouchableOpacity>
+          <Button label="Sign in" onPress={handleLogin} loading={isLoading} style={styles.submit} />
         </View>
 
-        <Text style={styles.footnote}>
-          By continuing you agree to our terms and privacy policy.
-        </Text>
+        <View style={styles.switchRow}>
+          <Text style={styles.switchText}>New to Eunoia?</Text>
+          <Pressable
+            onPress={() => router.push('/auth/register')}
+            disabled={isLoading}
+            hitSlop={12}
+            accessibilityRole="link"
+          >
+            <Text style={styles.switchLink}>Create an account</Text>
+          </Pressable>
+        </View>
       </KeyboardAwareScreenScrollView>
     </SafeAreaView>
   );
@@ -144,128 +116,44 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     paddingHorizontal: spacing.screenPadding,
-    paddingVertical: spacing.xxxl,
-    justifyContent: 'center',
+    paddingTop: spacing.xxxl,
+    paddingBottom: spacing.xxl,
   },
   header: {
-    marginBottom: 48,
-  },
-  brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 40,
-  },
-  brandDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.accent,
-  },
-  brandText: {
-    ...typography.overline,
-    color: colors.textPrimary,
-  },
-  eyebrow: {
-    ...typography.overline,
-    color: colors.textTertiary,
-    marginBottom: 12,
+    marginTop: 56,
+    marginBottom: spacing.xxxl,
   },
   title: {
     ...typography.display,
     color: colors.textPrimary,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   subtitle: {
     ...typography.body,
     color: colors.textSecondary,
-    maxWidth: 320,
+    maxWidth: 340,
   },
   form: {
-    width: '100%',
-    gap: spacing.lg,
+    gap: spacing.xl,
   },
-  fieldGroup: {
-    gap: 8,
+  submit: {
+    marginTop: spacing.xs,
   },
-  label: {
-    ...typography.overline,
-    color: colors.textTertiary,
-  },
-  inputContainer: {
+  switchRow: {
+    marginTop: 'auto',
+    paddingTop: spacing.xxxl,
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: spacing.inputRadius,
-    paddingHorizontal: spacing.lg,
-    height: 54,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-  },
-  inputContainerFocused: {
-    borderColor: colors.textPrimary,
-    backgroundColor: colors.surface,
-  },
-  input: {
-    flex: 1,
-    color: colors.textPrimary,
-    fontSize: 15,
-    letterSpacing: -0.1,
-  },
-  primaryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'center',
-    gap: 10,
-    backgroundColor: colors.inkSurface,
-    borderRadius: spacing.buttonRadius,
-    height: 54,
-    marginTop: spacing.sm,
-    ...shadows.md,
+    gap: 6,
   },
-  buttonDisabled: {
-    opacity: 0.5,
+  switchText: {
+    ...typography.callout,
+    color: colors.textSecondary,
   },
-  primaryButtonText: {
-    ...typography.headline,
-    color: colors.textInverse,
-  },
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    marginVertical: spacing.md,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.divider,
-  },
-  dividerText: {
-    ...typography.overline,
-    color: colors.textMuted,
-    fontSize: 10,
-  },
-  secondaryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    height: 54,
-    borderRadius: spacing.buttonRadius,
-    borderWidth: 1,
-    borderColor: colors.surfaceBorder,
-    backgroundColor: colors.surface,
-  },
-  secondaryButtonText: {
-    ...typography.headline,
+  switchLink: {
+    ...typography.callout,
+    fontFamily: fonts.semibold,
     color: colors.textPrimary,
-  },
-  footnote: {
-    ...typography.captionSmall,
-    color: colors.textMuted,
-    textAlign: 'center',
-    marginTop: spacing.xxl,
+    textDecorationLine: 'underline',
   },
 });
