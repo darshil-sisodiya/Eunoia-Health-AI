@@ -24,3 +24,12 @@ def test_no_denylisted_phrase_survives():
 def test_clean_text_is_untouched():
     text = "Drink more water. Aim for 7 hours of sleep!"
     assert scrub_diagnosis_language(text) == text
+
+
+def test_chat_scrub_keeps_emergency_advice_and_scrubs_bullets():
+    from gemini_insights import scrub_chat_language
+
+    text = "If you have chest pain, call 112.\n- stop taking amlodipine\n- walk daily"
+    assert scrub_chat_language(text) == (
+        f"If you have chest pain, call 112.\n{SOFT_REPLACEMENT}\n- walk daily"
+    )

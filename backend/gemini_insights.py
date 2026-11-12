@@ -42,14 +42,34 @@ INSIGHT_KEYS: Tuple[str, ...] = (
     "habit_optimization_recommendations",
 )
 
-# Verbatim from design § "System instruction" (Requirement 14.2).
-SYSTEM_INSTRUCTION = (
+# Shared by the insights and chat prompts.
+SAFETY_PREAMBLE = (
     "You are Eunoia, a preventive, medically cautious health assistant. You speak\n"
     "calmly, supportively, and intelligently. You SHALL NOT issue diagnoses, name a\n"
     "specific disease as the user's diagnosis, prescribe medication, or instruct the\n"
     "user to start, stop, or change a medication. You SHALL NOT use alarming\n"
     "language. You SHALL NOT promise medical outcomes. You frame everything as\n"
     "preventive guidance that complements, but does not replace, professional care.\n"
+)
+
+CHAT_SYSTEM_INSTRUCTION = (
+    SAFETY_PREAMBLE
+    + "If the user describes chest pain, breathlessness, sudden weakness, vision\n"
+    "changes, difficulty speaking, or thoughts of self-harm, tell them to seek\n"
+    "emergency care now (call 112 in India). You may explain what the user's\n"
+    "prescriptions say, but always defer dosing decisions to their doctor or\n"
+    "pharmacist."
+)
+
+# Verbatim from design § "System instruction" (Requirement 14.2).
+SYSTEM_INSTRUCTION = (
+    SAFETY_PREAMBLE
+    + "The overall risk and wellness scores are heuristic indices, not disease\n"
+    "probabilities or clinically validated predictions. Confidence measures data\n"
+    "coverage, not diagnostic accuracy. A clinical review flag can raise the risk\n"
+    "level independently of the numerical score. Preserve all clinical review\n"
+    "and emergency guidance in the contributing factor explanations; do not\n"
+    "reassure the user on the basis of a low numerical score.\n"
     "\n"
     "Return ONLY a single JSON object with these top-level string keys:\n"
     '"preventive_health_insights", "lifestyle_recommendations", "diet_suggestions",\n'
@@ -92,7 +112,7 @@ def build_prompt(profile: Dict[str, Any], risk: Dict[str, Any]) -> Tuple[str, st
     factors = risk.get("contributing_factors") or []
     if factors:
         factors_summary = ", ".join(
-            f"{f.get('dimension')} ({f.get('component')}, +{f.get('delta')})"
+            f"{f.get('dimension')} ({f.get('component')}, +{f.get('delta')}): {f.get('explanation', '')}"
             for f in factors
         )
     else:
@@ -235,9 +255,33 @@ _DENYLIST_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Splits after sentence-ending punctuation, capturing the whitespace so
-# even indices are sentences and odd indices are the separators.
-_SENTENCE_SPLIT = re.compile(r"((?<=[.!?])\s+)")
+# Chat drops "you have ": it would erase conditional safety advice such as
+# "If you have chest pain, seek emergency care".
+_CHAT_DENYLIST_PATTERN = re.compile(
+    "|".join(re.escape(p) for p in sorted(DIAGNOSIS_DENYLIST, key=len, reverse=True)
+             if p != "you have "),
+    re.IGNORECASE,
+)
+
+# Splits after sentence-ending punctuation or at a line break (chat replies use
+# unpunctuated bullet lines), capturing the separators so even indices are
+# sentences and odd indices are the separators.
+_SENTENCE_SPLIT = re.compile(r"((?<=[.!?])\s+|\s*\n\s*)")
+
+
+def _scrub(text: str, pattern: "re.Pattern[str]") -> str:
+    if not text:
+        return text
+    parts = _SENTENCE_SPLIT.split(text)
+    for i in range(0, len(parts), 2):
+        if pattern.search(parts[i]):
+            parts[i] = SOFT_REPLACEMENT
+    return "".join(parts)
+
+
+def scrub_chat_language(text: str) -> str:
+    """Chat variant of :func:`scrub_diagnosis_language` (see ``_CHAT_DENYLIST_PATTERN``)."""
+    return _scrub(text, _CHAT_DENYLIST_PATTERN)
 
 
 def scrub_diagnosis_language(text: str) -> str:
@@ -252,16 +296,10 @@ def scrub_diagnosis_language(text: str) -> str:
     coroutine in task 5.3 \u2014 this function operates on a single string and is
     deliberately section-agnostic.
     """
-    if not text:
-        return text
     # Replace the whole sentence, not just the phrase: splicing the soft line
     # into the middle of one produced "...activity, Discuss this with your
     # doctor.a solid foundation". Separators are kept so spacing survives.
-    parts = _SENTENCE_SPLIT.split(text)
-    for i in range(0, len(parts), 2):
-        if _DENYLIST_PATTERN.search(parts[i]):
-            parts[i] = SOFT_REPLACEMENT
-    return "".join(parts)
+    return _scrub(text, _DENYLIST_PATTERN)
 
 
 # ---------------------------------------------------------------------------
@@ -355,5 +393,7 @@ __all__ = [
     "DIAGNOSIS_DENYLIST",
     "SOFT_REPLACEMENT",
     "scrub_diagnosis_language",
+    "scrub_chat_language",
+    "CHAT_SYSTEM_INSTRUCTION",
     "generate",
 ]

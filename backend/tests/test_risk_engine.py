@@ -49,7 +49,7 @@ def healthy_payload():
             'ldl_mgdl': 90, 'waist_cm': 68,
         },
         'mental': {'phq2_interest': 0, 'phq2_down': 0, 'gad2_nervous': 0, 'gad2_worry': 0},
-        'medical': {'conditions': []},
+        'medical': {'conditions': [], 'medications': []},
         'family_history': {'entries': []},
     }
 
@@ -61,6 +61,12 @@ def condition(**over):
     }
     entry.update(over)
     return entry
+
+
+def findrisc_answers(**over):
+    return dict(daily_activity_30min=True, daily_fruit_vegetables=True,
+                ever_bp_medication=False, ever_high_glucose=False,
+                family_diabetes='none') | over
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +281,9 @@ def test_wellness_stays_in_range():
 # ---------------------------------------------------------------------------
 
 def test_findrisc_emitted_when_inputs_present():
-    ids = {s['id'] for s in re.compute_subscores(healthy_payload())}
+    payload = healthy_payload()
+    payload['findrisc'] = findrisc_answers()
+    ids = {s['id'] for s in re.compute_subscores(payload)}
     assert 'findrisc' in ids
 
 
@@ -450,3 +458,137 @@ def test_lifestyle_ordinals_are_monotonic(dimension, lower, higher):
         payload['lifestyle'][dimension] = value
         return re.compute_components_uncapped(payload)['cardiovascular']
     assert score(higher) > score(lower)
+
+
+@pytest.mark.parametrize('systolic,diastolic,level', [
+    (200, 130, 'Very High'), (181, 72, 'Very High'), (112, 121, 'Very High'),
+    (180, 120, 'High'), (140, 90, 'High'), (112, 72, 'Low'),
+])
+def test_bp_review_level_does_not_invent_component_points(systolic, diastolic, level):
+    payload = healthy_payload()
+    payload['vitals'].update(systolic_mmhg=systolic, diastolic_mmhg=diastolic)
+    result = re.compute_risk(payload)
+    assert result['risk_level'] == level
+    assert result['risk_score'] == sum(c['score'] for c in result['components'].values())
+    if level == 'Very High':
+        assert result['wellness_score'] < 100
+        factor = next(f for f in result['contributing_factors'] if f['dimension'] == 'vitals.blood_pressure')
+        assert 'seek emergency care now' in factor['explanation']
+        assert 'independently of the point total' in factor['explanation']
+
+
+def test_positive_mental_screeners_are_not_overridden_by_healthy_habits():
+    payload = healthy_payload()
+    baseline = re.compute_risk(payload)
+    payload['mental'] = dict.fromkeys(payload['mental'], 3)
+    result = re.compute_risk(payload)
+    assert result['risk_level'] == 'Moderate'
+    assert result['wellness_score'] < baseline['wellness_score']
+    assert all(s['band'] == 'Screen positive' for s in result['subscores'])
+
+
+def test_unanswered_diet_cannot_improve_scores_or_retain_full_confidence():
+    payload = healthy_payload()
+    payload['lifestyle']['fruit_veg_servings'] = 0
+    reported = re.compute_risk(payload)
+    del payload['lifestyle']['fruit_veg_servings']
+    missing = re.compute_risk(payload)
+    assert missing['wellness_score'] <= reported['wellness_score']
+    assert missing['risk_score'] >= reported['risk_score']
+    assert missing['confidence']['confidence'] < reported['confidence']['confidence']
+
+
+def test_empty_input_earns_no_wellness_or_confidence_credit():
+    result = re.compute_risk({})
+    assert result['wellness_score'] == 0
+    assert result['confidence']['confidence'] == 0
+
+
+@pytest.mark.parametrize('fasting,a1c,points', [(300, 5.1, 9), (90, 7, 9), (110, 5.1, 5)])
+def test_discordant_glucose_results_retain_evidence_and_explain_review(fasting, a1c, points):
+    payload = healthy_payload()
+    payload['vitals'].update(fasting_glucose_mgdl=fasting, hba1c_percent=a1c)
+    result = re.compute_risk(payload)
+    assert result['components']['metabolic']['score'] == points
+    assert result['risk_level'] != 'Low'
+    assert 'Neither result cancels the other' in next(
+        f['explanation'] for f in result['contributing_factors'] if f['dimension'] == 'vitals.glucose')
+
+
+@pytest.mark.parametrize('status,cpd,years', [('regular', 20, 0), ('never', 20, 0), ('regular', 0, 0)])
+def test_smoking_quantities_cannot_erase_current_smoking(status, cpd, years):
+    payload = healthy_payload()
+    payload['lifestyle'].update(smoking=status, cigarettes_per_day=cpd, smoking_years=years)
+    result = re.compute_risk(payload)
+    assert result['components']['cardiovascular']['score'] >= 10
+    assert result['wellness_score'] < 100
+
+
+def test_incomplete_bp_or_hdl_only_does_not_earn_full_confidence():
+    payload = healthy_payload()
+    del payload['vitals']['systolic_mmhg']
+    del payload['vitals']['ldl_mgdl']
+    payload['vitals']['hdl_mgdl'] = 60
+    missing = {e['id'] for e in re.compute_confidence(payload)['missing']}
+    assert {'blood_pressure', 'lipids'} <= missing
+
+
+def test_findrisc_is_not_emitted_from_proxy_answers():
+    assert 'findrisc' not in {s['id'] for s in re.compute_subscores(healthy_payload())}
+
+
+@pytest.mark.parametrize('field', ['daily_activity_30min', 'daily_fruit_vegetables',
+                                  'ever_bp_medication', 'ever_high_glucose', 'family_diabetes'])
+def test_findrisc_requires_every_exact_answer(field):
+    payload = healthy_payload()
+    payload['findrisc'] = findrisc_answers()
+    del payload['findrisc'][field]
+    assert re._findrisc(payload) is None
+
+
+def test_findrisc_uses_lifetime_answers_instead_of_current_proxy_values():
+    payload = healthy_payload()
+    payload['findrisc'] = findrisc_answers(daily_activity_30min=False,
+                                         ever_bp_medication=True, ever_high_glucose=True)
+    result = re._findrisc(payload)
+    assert result['score'] == 9  # 2 activity + 2 medication history + 5 glucose history
+    assert '1 in' not in result['detail']
+
+
+def test_findrisc_maximum_is_26():
+    payload = healthy_payload()
+    payload['basic'].update(age=70, weight_kg=100)
+    payload['vitals']['waist_cm'] = 110
+    payload['findrisc'] = findrisc_answers(daily_activity_30min=False, daily_fruit_vegetables=False,
+                                         ever_bp_medication=True, ever_high_glucose=True,
+                                         family_diabetes='first_degree')
+    assert re._findrisc(payload)['score'] == 26
+
+
+@pytest.mark.parametrize('age,gender,conditions', [(15, 'female', []), (25, 'non_binary', []),
+                                                 (25, 'female', [condition()])])
+def test_findrisc_excludes_unsupported_or_already_diagnosed_profiles(age, gender, conditions):
+    payload = healthy_payload()
+    payload['basic'].update(age=age, gender=gender)
+    payload['medical']['conditions'] = conditions
+    payload['findrisc'] = findrisc_answers()
+    assert re._findrisc(payload) is None
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), float('-inf')])
+def test_nonfinite_readings_are_missing_not_healthy(value):
+    payload = healthy_payload()
+    payload['vitals']['hba1c_percent'] = value
+    assert re.compute_risk(payload)['confidence']['confidence'] < 100
+
+
+def test_urgent_guidance_survives_existing_frontend_top_three_limit():
+    payload = healthy_payload()
+    payload['vitals'].update(systolic_mmhg=200, diastolic_mmhg=130)
+    payload['medical']['conditions'] = [condition(name=name) for name in
+                                       ('Heart Disease', 'Type 2 Diabetes', 'Chronic Kidney Disease')]
+    result = re.compute_risk(payload)
+    visible = sorted(result['contributing_factors'], key=lambda f: -f['delta'])[:3]
+    assert all(f['dimension'] != 'vitals.blood_pressure' for f in visible)
+    assert any('seek emergency care now' in f.get('explanation', '') for f in visible)
+    assert result['risk_score'] == sum(c['score'] for c in result['components'].values())
