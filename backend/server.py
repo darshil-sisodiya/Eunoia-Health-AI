@@ -900,6 +900,19 @@ class Activity(BaseModel):
     meditation_minutes_7d: Optional[float] = Field(default=None, ge=0)
 
 
+class FindriscAnswers(BaseModel):
+    """Exact questionnaire answers; optional for existing clients.
+
+    Never substitute exercise minutes, current glucose or a hypertension
+    diagnosis for these questions about daily activity and lifetime history.
+    """
+    daily_activity_30min: bool = Field(strict=True)
+    daily_fruit_vegetables: bool = Field(strict=True)
+    ever_bp_medication: bool = Field(strict=True)
+    ever_high_glucose: bool = Field(strict=True)
+    family_diabetes: Literal['none', 'second_degree', 'first_degree']
+
+
 class AnalyzeRiskRequest(BaseModel):
     basic: BasicProfile
     lifestyle: Lifestyle
@@ -913,6 +926,7 @@ class AnalyzeRiskRequest(BaseModel):
     screening: Optional[ScreeningHistory] = None
     insurance: Optional[Insurance] = None
     goals: Optional[Goals] = None
+    findrisc: Optional[FindriscAnswers] = None
 
 
 RiskLevel = Literal['Low', 'Moderate', 'High', 'Very High']
@@ -2506,6 +2520,11 @@ async def get_health_profile(username: str = Depends(verify_token)):
 
 # ==================== CHAT ENDPOINTS ====================
 
+CHAT_FALLBACK_REPLY = (
+    "I can't answer right now. Please try again in a moment. For urgent "
+    "symptoms, contact a healthcare professional or call 112."
+)
+
 @api_router.post("/chat/message", response_model=ChatMessageResponse)
 async def send_chat_message(
     message: ChatMessageCreate,
@@ -2524,7 +2543,7 @@ async def send_chat_message(
     profile_data = await profile_context.load_full_profile(user_id, fetch_one, fetch_all)
     profile = profile_data.get("profile")
 
-    context = "You are a helpful health assistant."
+    context = gemini_insights.CHAT_SYSTEM_INSTRUCTION
     rendered = profile_context.render_profile_for_ai(profile_data, purpose="chat")
     if rendered:
         context += "\n\nUser's Health Profile:\n" + rendered + "\n"
@@ -2544,7 +2563,7 @@ async def send_chat_message(
                 dosage = p.get('dosage') or ''
                 freq = p.get('frequency') or p.get('timing') or ''
                 context += f"- {med}: {dosage} {freq}\n"
-            context += "\nWhen relevant, you may reference these prescriptions and suggest actions like 'take this medicine from your prescription' while reminding the user to follow doctor's instructions."
+            context += "\nWhen relevant, you may say what these prescriptions state, and remind the user to follow their doctor's instructions."
     except Exception:
         pass
     
@@ -2555,24 +2574,34 @@ async def send_chat_message(
         (user_id, "user", message.message, user_ts),
     )
     
-    # Get AI response
+    # Get AI response. On timeout or error, return a fixed safe reply
+    # (not stored) instead of a 500.
     try:
-        response = await gemini_generate(context, message.message)
-
-        assistant_ts = to_dt(datetime.utcnow())
-        await execute(
-            "INSERT INTO chat_messages (user_id, role, content, timestamp) VALUES (%s, %s, %s, %s)",
-            (user_id, "assistant", response, assistant_ts),
+        response = await asyncio.wait_for(
+            gemini_generate(context, message.message),
+            timeout=gemini_insights.GEMINI_TIMEOUT_SECONDS,
         )
-
-        return ChatMessageResponse(
-            role="assistant",
-            content=response,
-            timestamp=assistant_ts,
-        )
+        response = gemini_insights.scrub_chat_language(response)
+        if not response.strip():
+            raise ValueError("empty chat response")
     except Exception as e:
         logging.error(f"Error in chat: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get AI response")
+        return ChatMessageResponse(
+            role="assistant",
+            content=CHAT_FALLBACK_REPLY,
+            timestamp=to_dt(datetime.utcnow()),
+        )
+
+    assistant_ts = to_dt(datetime.utcnow())
+    await execute(
+        "INSERT INTO chat_messages (user_id, role, content, timestamp) VALUES (%s, %s, %s, %s)",
+        (user_id, "assistant", response, assistant_ts),
+    )
+    return ChatMessageResponse(
+        role="assistant",
+        content=response,
+        timestamp=assistant_ts,
+    )
 
 @api_router.get("/chat/history", response_model=ChatHistoryResponse)
 async def get_chat_history(

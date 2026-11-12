@@ -41,6 +41,7 @@ is read through ``.get()`` with a default, so v1-shaped payloads (including
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -203,8 +204,10 @@ CONFIDENCE_WEIGHTS: Dict[str, int] = {
     'lipids': 10,
     'waist': 8,
     'conditions_detail': 12,
-    'medications_detail': 10,
-    'family_detail': 10,
+    'medications_detail': 5,
+    'family_detail': 5,
+    'diet': 5,
+    'tobacco': 5,
     'lifestyle_quantities': 10,
     'mental_screeners': 10,
 }
@@ -219,6 +222,8 @@ _CONFIDENCE_LABELS: Dict[str, str] = {
     'family_detail': 'Family history detail',
     'lifestyle_quantities': 'Lifestyle amounts',
     'mental_screeners': 'Mood and anxiety check',
+    'diet': 'Fruit and vegetable intake',
+    'tobacco': 'Smoking status',
 }
 
 
@@ -236,7 +241,8 @@ def _num(value: Any) -> Optional[float]:
     if value is None or isinstance(value, bool):
         return None
     try:
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
 
@@ -245,7 +251,7 @@ def bmi_value(height_cm: Any, weight_kg: Any) -> Optional[float]:
     """BMI, or None when the inputs are unusable."""
     h = _num(height_cm)
     w = _num(weight_kg)
-    if not h or not w or h <= 0:
+    if not h or not w or h <= 0 or w <= 0:
         return None
     return w / ((h / 100.0) ** 2)
 
@@ -312,20 +318,25 @@ def _bp_points(systolic: Optional[float], diastolic: Optional[float]) -> int:
 
 
 def _glucose_points(fasting_mgdl: Optional[float], hba1c: Optional[float]) -> int:
-    """Diabetic range scores above pre-diabetic range. HbA1c wins when both."""
-    if hba1c is not None:
-        if hba1c >= 6.5:
-            return 9
-        if hba1c >= 5.7:
-            return 5
-        return 0
-    if fasting_mgdl is not None:
-        if fasting_mgdl >= 126:
-            return 9
-        if fasting_mgdl >= 100:
-            return 5
-        return 0
-    return 0
+    """Retain the stronger signal; discordant tests require clinical review."""
+    fasting = 0 if fasting_mgdl is None else 9 if fasting_mgdl >= 126 else 5 if fasting_mgdl >= 100 else 0
+    glycated = 0 if hba1c is None else 9 if hba1c >= 6.5 else 5 if hba1c >= 5.7 else 0
+    return max(fasting, glycated)
+
+
+def _smoking_points(lifestyle: Dict[str, Any]) -> int:
+    """Current smoking cannot disappear because completed years round to zero."""
+    ordinal = SMOKING_ORDINAL.get(_norm(lifestyle.get('smoking')), 0)
+    cpd = _num(lifestyle.get('cigarettes_per_day'))
+    current = 10 if cpd is not None and cpd >= 20 else 6 if cpd is not None and cpd > 0 else 0
+    py = pack_years(cpd, lifestyle.get('smoking_years'))
+    cumulative = 0 if py is None else 12 if py >= 20 else 8 if py >= 10 else 4 if py > 0 else 0
+    return max(ordinal, current, cumulative)
+
+
+def _answered_list(payload: Dict[str, Any], section: str, *fields: str) -> bool:
+    data = payload.get(section) or {}
+    return any(isinstance(data.get(field), list) for field in fields)
 
 
 def _lipid_points(ldl: Optional[float], total: Optional[float]) -> int:
@@ -528,13 +539,13 @@ def _accumulate(payload: Dict[str, Any]) -> Tuple[Dict[str, int], List[Dict[str,
     # -- cardiovascular -----------------------------------------------------
     py = pack_years(lifestyle.get('cigarettes_per_day'), lifestyle.get('smoking_years'))
     if py is not None:
-        pts = 12 if py >= 20 else 8 if py >= 10 else 4 if py > 0 else 0
+        pts = _smoking_points(lifestyle)
         add('lifestyle.pack_years', 'cardiovascular', pts,
             label='Smoking', kind='measured',
             explanation='{0:.1f} pack-years'.format(py))
     else:
         add('lifestyle.smoking', 'cardiovascular',
-            SMOKING_ORDINAL.get(_norm(lifestyle.get('smoking')), 0), label='Smoking')
+            _smoking_points(lifestyle), label='Smoking')
 
     add('lifestyle.smokeless_tobacco', 'cardiovascular',
         SMOKELESS_TOBACCO.get(_norm(lifestyle.get('smokeless_tobacco')), 0),
@@ -629,6 +640,10 @@ def _accumulate(payload: Dict[str, Any]) -> Tuple[Dict[str, int], List[Dict[str,
     if servings is not None:
         add('lifestyle.fruit_veg', 'metabolic', 2 if servings < 2 else 0,
             label='Fruit and vegetables')
+    else:
+        add('lifestyle.fruit_veg_unknown', 'metabolic', 2,
+            label='Fruit and vegetable intake not known', kind='unassessed',
+            explanation='Provisional points until intake is reported; not a finding of poor diet.')
 
     add('lifestyle.water_intake', 'metabolic',
         WATER_ORDINAL.get(_norm(lifestyle.get('water_intake')), 0), label='Hydration')
@@ -678,8 +693,8 @@ def _accumulate(payload: Dict[str, Any]) -> Tuple[Dict[str, int], List[Dict[str,
 def classify(score: int) -> str:
     """Map a 0..100 risk score to a level.
 
-    Bands are quartiles of a range that is now genuinely reachable, because
-    ``COMPONENT_CAPS`` sums to exactly 100.
+    These are heuristic index bands, not calibrated disease probabilities.
+    The report level can be raised separately by a clinical review flag.
     """
     if score < 25:
         return 'Low'
@@ -710,7 +725,7 @@ def _evidence_state(payload: Dict[str, Any]) -> Dict[str, str]:
     mental = payload.get('mental') or {}
 
     def vital_state(fields: List[str]) -> str:
-        if any(vitals.get(f) is not None for f in fields):
+        if any(_num(vitals.get(f)) is not None for f in fields):
             return 'known'
         if any(f in declared for f in fields):
             return 'unknown'
@@ -719,14 +734,16 @@ def _evidence_state(payload: Dict[str, Any]) -> Dict[str, str]:
     state: Dict[str, str] = {
         'blood_pressure': vital_state(['systolic_mmhg', 'diastolic_mmhg']),
         'glucose': vital_state(['fasting_glucose_mgdl', 'hba1c_percent']),
-        'lipids': vital_state(['ldl_mgdl', 'total_cholesterol_mgdl', 'hdl_mgdl']),
+        'lipids': vital_state(['ldl_mgdl', 'total_cholesterol_mgdl']),
         'waist': vital_state(['waist_cm']),
     }
+    if not all(_num(vitals.get(f)) is not None for f in ('systolic_mmhg', 'diastolic_mmhg')):
+        state['blood_pressure'] = 'unknown' if declared & {'systolic_mmhg', 'diastolic_mmhg'} else 'unasked'
 
     # A condition list is "detailed" once every entry says something about how
     # long it has been present and how well it is controlled.
     if not conditions:
-        state['conditions_detail'] = 'known'   # nothing to detail is a complete answer
+        state['conditions_detail'] = 'known' if _answered_list(payload, 'medical', 'conditions', 'existing_conditions') else 'unasked'
     elif all(
         (c.get('diagnosed_bucket') or 'unknown') != 'unknown'
         and (c.get('control') or 'unsure') != 'unsure'
@@ -737,14 +754,14 @@ def _evidence_state(payload: Dict[str, Any]) -> Dict[str, str]:
         state['conditions_detail'] = 'unasked'
 
     if not medications:
-        state['medications_detail'] = 'known'
+        state['medications_detail'] = 'known' if _answered_list(payload, 'medical', 'medications', 'current_medications') else 'unasked'
     elif all((m.get('started_bucket') or 'unknown') != 'unknown' for m in medications):
         state['medications_detail'] = 'known'
     else:
         state['medications_detail'] = 'unasked'
 
     if not family:
-        state['family_detail'] = 'known'
+        state['family_detail'] = 'known' if _answered_list(payload, 'family_history', 'entries', 'conditions') else 'unasked'
     elif all((e.get('relations') or []) for e in family):
         state['family_detail'] = 'known'
     else:
@@ -759,6 +776,8 @@ def _evidence_state(payload: Dict[str, Any]) -> Dict[str, str]:
 
     has_mental = _phq2_total(mental) is not None and _gad2_total(mental) is not None
     state['mental_screeners'] = 'known' if has_mental else 'unasked'
+    state['diet'] = 'known' if _num(lifestyle.get('fruit_veg_servings')) is not None else 'unasked'
+    state['tobacco'] = 'known' if _norm(lifestyle.get('smoking')) in SMOKING_ORDINAL else 'unasked'
 
     return state
 
@@ -808,54 +827,112 @@ def compute_wellness(payload: Dict[str, Any]) -> int:
     activity = payload.get('activity') or {}
     total = 0
 
-    # Activity (max 25)
+    # Activity (max 20)
     avg_steps = _num(activity.get('avg_steps_7d'))
     minutes = _num(lifestyle.get('exercise_minutes_per_week'))
     if avg_steps is not None:
-        total += 25 if avg_steps >= 8000 else 18 if avg_steps >= 5000 else 10 if avg_steps >= 3000 else 0
+        total += 20 if avg_steps >= 8000 else 14 if avg_steps >= 5000 else 8 if avg_steps >= 3000 else 0
     elif minutes is not None:
-        total += 25 if minutes >= 150 else 18 if minutes >= 75 else 10 if minutes >= 1 else 0
+        total += 20 if minutes >= 150 else 14 if minutes >= 75 else 8 if minutes >= 1 else 0
     else:
-        total += {'daily': 25, 'regular': 18, 'occasional': 10, 'never': 0}.get(
+        total += {'daily': 20, 'regular': 14, 'occasional': 8, 'never': 0}.get(
             _norm(lifestyle.get('exercise_frequency')), 0)
 
-    # Sleep (max 20)
+    # Sleep (max 15)
     hours = _num(lifestyle.get('sleep_hours'))
     if hours is not None:
-        total += 20 if 7 <= hours <= 9 else 12 if 6 <= hours <= 10 else 4
+        total += 15 if 7 <= hours <= 9 else 9 if 6 <= hours <= 10 else 3
     else:
-        total += {'excellent': 20, 'good': 15, 'fair': 8, 'poor': 2}.get(
+        total += {'excellent': 15, 'good': 11, 'fair': 6, 'poor': 1}.get(
             _norm(lifestyle.get('sleep_quality')), 0)
 
     # Diet (max 15)
     servings = _num(lifestyle.get('fruit_veg_servings'))
     if servings is not None:
         total += 15 if servings >= 5 else 10 if servings >= 3 else 5 if servings >= 1 else 0
-    else:
-        total += 7
 
     # Not smoking (max 10)
-    total += {'never': 10, 'former': 7, 'occasional': 3, 'regular': 0}.get(
+    tobacco_credit = {'never': 10, 'former': 7, 'occasional': 3, 'regular': 0}.get(
         _norm(lifestyle.get('smoking')), 0)
+    if _smoking_points(lifestyle) >= 6:
+        tobacco_credit = min(tobacco_credit, 3)
+    if _smoking_points(lifestyle) >= 10:
+        tobacco_credit = 0
+    smokeless = _norm(lifestyle.get('smokeless_tobacco'))
+    if smokeless in ('occasional', 'daily'):
+        tobacco_credit = min(tobacco_credit, 3 if smokeless == 'occasional' else 0)
+    total += tobacco_credit
 
     # Healthy weight (max 10)
     bucket = bmi_bucket(bmi_value(basic.get('height_cm'), basic.get('weight_kg')))
-    total += {'normal': 10, 'overweight': 6, 'underweight': 4, 'obese': 2}.get(bucket or '', 5)
+    total += {'normal': 10, 'overweight': 6, 'underweight': 4, 'obese': 2}.get(bucket or '', 0)
 
-    # Conditions under control (max 20)
+    # Conditions under control (max 10). Absence of an answer earns no credit.
     conditions = _conditions(payload)
     if not conditions:
-        total += 20
+        total += 10 if _answered_list(payload, 'medical', 'conditions', 'existing_conditions') else 0
     else:
         controls = {(c.get('control') or 'unsure') for c in conditions}
         if controls <= {'well'}:
-            total += 18
+            total += 9
         elif controls & {'poorly', 'unsure'}:
-            total += 5
+            total += 0
         else:
-            total += 12
+            total += 5
+
+    # Vitals (max 10): only known, favourable readings earn credit.
+    vitals = _vitals(payload)
+    s, d = _num(vitals.get('systolic_mmhg')), _num(vitals.get('diastolic_mmhg'))
+    if s is not None and d is not None and 90 <= s < 120 and 60 <= d < 80:
+        total += 4
+    fasting, a1c = _num(vitals.get('fasting_glucose_mgdl')), _num(vitals.get('hba1c_percent'))
+    if (fasting is not None or a1c is not None) and _glucose_points(fasting, a1c) == 0 and (fasting is None or fasting >= 70):
+        total += 3
+    ldl, cholesterol = _num(vitals.get('ldl_mgdl')), _num(vitals.get('total_cholesterol_mgdl'))
+    if (ldl is not None or cholesterol is not None) and _lipid_points(ldl, cholesterol) == 0:
+        total += 3
+
+    # Mood and anxiety (max 10); these are screening results, not diagnoses.
+    mental = payload.get('mental') or {}
+    for score in (_phq2_total(mental), _gad2_total(mental)):
+        if score is not None:
+            total += 5 if score == 0 else 3 if score < 3 else 0
 
     return max(0, min(100, total))
+
+
+def _review_flags(payload: Dict[str, Any]) -> List[Tuple[str, str, str]]:
+    """Minimum report levels, independent of the additive burden index.
+
+    These are conservative product review rules, not calibrated risk bands.
+    Keep urgent guidance deterministic and visible without an AI response.
+    """
+    flags = []
+    vitals = _vitals(payload)
+    s, d = _num(vitals.get('systolic_mmhg')), _num(vitals.get('diastolic_mmhg'))
+    if (s is not None and s > 180) or (d is not None and d > 120):
+        flags.append(('vitals.blood_pressure', 'Very High',
+                      'Very high reported blood pressure raises the report level independently of the point total. '
+                      'If you have chest pain, breathlessness, weakness, vision changes or difficulty speaking, seek emergency care now. '
+                      'Otherwise repeat the measurement after at least one minute and contact a healthcare professional immediately if it remains this high.'))
+    elif _bp_points(s, d) >= 9:
+        flags.append(('vitals.blood_pressure', 'High',
+                      'Elevated reported blood pressure raises the report level independently of the point total. Arrange clinical review and repeat measurements.'))
+    fasting, a1c = _num(vitals.get('fasting_glucose_mgdl')), _num(vitals.get('hba1c_percent'))
+    if _glucose_points(fasting, a1c) >= 9:
+        flags.append(('vitals.glucose', 'High',
+                      'A reported blood sugar result needs clinical review and raises the report level independently of the point total. '
+                      'A single result is not a diagnosis; confirm with a healthcare professional.'))
+    if fasting is not None and a1c is not None and _glucose_points(fasting, None) != _glucose_points(None, a1c):
+        flags.append(('vitals.glucose', 'Moderate',
+                      'Fasting glucose and HbA1c fall in different ranges. Neither result cancels the other; discuss repeat testing with a healthcare professional.'))
+    mental = payload.get('mental') or {}
+    for name, score in (('phq2', _phq2_total(mental)), ('gad2', _gad2_total(mental))):
+        if score is not None and score >= 3:
+            flags.append(('mental.' + name, 'Moderate',
+                          'A positive screening result raises the report level to at least Moderate independently of the point total. '
+                          'Arrange a fuller mental health assessment; this screening result is not a diagnosis.'))
+    return flags
 
 
 # ---------------------------------------------------------------------------
@@ -863,80 +940,46 @@ def compute_wellness(payload: Dict[str, Any]) -> int:
 # ---------------------------------------------------------------------------
 
 def _findrisc(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """FINDRISC 8-item type-2 diabetes risk score (0..26).
+    """Original eight-item questionnaire; never infer answers from proxies.
 
-    Note this instrument keeps its own published BMI and waist cutoffs. They
-    are not the Asia-Pacific cutoffs used elsewhere in this module — changing
-    a validated instrument's thresholds would invalidate its published risk
-    percentages.
+    Original form: https://carpha.org/Portals/0/FINDRISC.pdf
+    Existing clients do not collect all these answers, so omit the instrument
+    until the exact questionnaire is supplied. No population risk percentages
+    are exported as individual predictions for this app's population.
     """
     basic = payload.get('basic') or {}
-    lifestyle = payload.get('lifestyle') or {}
-    vitals = _vitals(payload)
-
+    answers = payload.get('findrisc') or {}
     age = _num(basic.get('age'))
     bmi = bmi_value(basic.get('height_cm'), basic.get('weight_kg'))
-    if age is None or bmi is None:
-        return None
-
-    score = 0
-    score += 0 if age < 45 else 2 if age < 55 else 3 if age < 65 else 4
-    score += 0 if bmi < 25 else 1 if bmi <= 30 else 3
-
-    waist = _num(vitals.get('waist_cm'))
+    waist = _num(_vitals(payload).get('waist_cm'))
     gender = _norm(basic.get('gender'))
-    if waist is not None:
-        if gender == 'female':
-            score += 0 if waist < 80 else 3 if waist <= 88 else 4
-        else:
-            score += 0 if waist < 94 else 3 if waist <= 102 else 4
+    required = ('daily_activity_30min', 'daily_fruit_vegetables',
+                'ever_bp_medication', 'ever_high_glucose')
+    family = answers.get('family_diabetes')
+    if (age is None or age < 18 or bmi is None or waist is None
+            or gender not in ('male', 'female')
+            or not all(isinstance(answers.get(k), bool) for k in required)
+            or family not in ('none', 'second_degree', 'first_degree')
+            or not _answered_list(payload, 'medical', 'conditions', 'existing_conditions')):
+        return None
+    if any('diabetes' in _norm(c.get('name')) for c in _conditions(payload)):
+        return None  # Do not predict development of a condition already reported.
 
-    minutes = _num(lifestyle.get('exercise_minutes_per_week'))
-    if minutes is not None:
-        score += 0 if minutes >= 150 else 2
-    else:
-        score += 0 if _norm(lifestyle.get('exercise_frequency')) in ('daily', 'regular') else 2
-
-    servings = _num(lifestyle.get('fruit_veg_servings'))
-    if servings is not None:
-        score += 0 if servings >= 1 else 1
-
-    conditions = {_norm(c.get('name')) for c in _conditions(payload)}
-    if 'hypertension' in conditions or 'high blood pressure' in conditions:
-        score += 2
-
-    glucose = _glucose_points(
-        _num(vitals.get('fasting_glucose_mgdl')), _num(vitals.get('hba1c_percent'))
-    )
-    if glucose >= 5:
-        score += 5
-
-    family = _family(payload)
-    diabetes = [e for e in family if e.get('condition') == 'Diabetes']
-    if diabetes:
-        first = any(
-            {_norm(r) for r in (e.get('relations') or [])} & _FIRST_DEGREE for e in diabetes
-        )
-        score += 5 if first else 3
-
-    if score < 7:
-        band, detail = 'Low', 'about 1 in 100 over 10 years'
-    elif score < 12:
-        band, detail = 'Slightly elevated', 'about 1 in 25 over 10 years'
-    elif score < 15:
-        band, detail = 'Moderate', 'about 1 in 6 over 10 years'
-    elif score <= 20:
-        band, detail = 'High', 'about 1 in 3 over 10 years'
-    else:
-        band, detail = 'Very high', 'about 1 in 2 over 10 years'
-
+    score = 0 if age < 45 else 2 if age < 55 else 3 if age < 65 else 4
+    score += 0 if bmi < 25 else 1 if bmi <= 30 else 3
+    low, high = (80, 88) if gender == 'female' else (94, 102)
+    score += 0 if waist < low else 3 if waist <= high else 4
+    score += 0 if answers['daily_activity_30min'] else 2
+    score += 0 if answers['daily_fruit_vegetables'] else 1
+    score += 2 if answers['ever_bp_medication'] else 0
+    score += 5 if answers['ever_high_glucose'] else 0
+    score += {'none': 0, 'second_degree': 3, 'first_degree': 5}[family]
+    band = ('Low' if score < 7 else 'Slightly elevated' if score < 12
+            else 'Moderate' if score < 15 else 'High' if score <= 20 else 'Very high')
     return {
-        'id': 'findrisc',
-        'label': 'FINDRISC (type 2 diabetes)',
-        'score': score,
-        'max': 26,
-        'band': band,
-        'detail': detail,
+        'id': 'findrisc', 'label': 'FINDRISC (type 2 diabetes)',
+        'score': score, 'max': 26, 'band': band,
+        'detail': 'Original questionnaire score; not a diagnosis or a locally calibrated ten-year probability. Discuss screening with a healthcare professional.',
     }
 
 
@@ -991,10 +1034,31 @@ def compute_risk(payload: Dict[str, Any]) -> Dict[str, Any]:
     capped = {k: min(components[k], COMPONENT_CAPS[k]) for k in _COMPONENT_ORDER}
     risk_score = min(100, sum(capped.values()))
     confidence = compute_confidence(payload)
+    level = classify(risk_score)
+    levels = ('Low', 'Moderate', 'High', 'Very High')
+    flags = _review_flags(payload)
+    for dimension, minimum, explanation in flags:
+        if levels.index(minimum) > levels.index(level):
+            level = minimum
+        for factor in factors:
+            if factor['dimension'] == dimension:
+                factor['explanation'] = (factor.get('explanation', '') + ' ' + explanation).strip()
+    # Existing onboarding renders only the three largest deltas, even when
+    # AI is unavailable. Keep a report-level notice visible if its own factor
+    # falls outside that shortlist; do not manipulate points to force sorting.
+    visible = sorted(factors, key=lambda factor: -factor['delta'])[:3]
+    visible_dimensions = {factor['dimension'] for factor in visible}
+    hidden_notices = [explanation for dimension, _, explanation in flags
+                      if dimension not in visible_dimensions]
+    if visible and hidden_notices:
+        first = visible[0]
+        first['explanation'] = ('Report review notice (no additional points): '
+                                + ' '.join(hidden_notices) + ' '
+                                + first.get('explanation', '')).strip()
 
     return {
         'risk_score': risk_score,
-        'risk_level': classify(risk_score),
+        'risk_level': level,
         'wellness_score': compute_wellness(payload),
         'components': {
             k: {'score': capped[k], 'cap': COMPONENT_CAPS[k]} for k in _COMPONENT_ORDER
