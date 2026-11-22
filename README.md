@@ -720,8 +720,8 @@ EXPO_PUBLIC_BACKEND_URL=http://192.168.x.x:8000
 Quick version (needs Python 3.11/3.12, Node 20/22 LTS, and a running MySQL 8):
 
 ```powershell
-git clone https://github.com/darshil-sisodiya/major-project.git
-cd major-project
+git clone https://github.com/darshil-sisodiya/Eunoia-Health-AI.git
+cd Eunoia-Health-AI
 
 # Backend (terminal 1). Edit backend/.env with your MySQL password, a JWT_SECRET and a GEMINI_API_KEY.
 Copy-Item backend\.env.example backend\.env

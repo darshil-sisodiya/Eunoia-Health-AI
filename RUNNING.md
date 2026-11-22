@@ -41,11 +41,11 @@ You also need a **Google Gemini API key** for the AI features (chat, prescriptio
 ## 1. Get The Code
 
 ```bash
-git clone https://github.com/darshil-sisodiya/major-project.git
-cd major-project
+git clone https://github.com/darshil-sisodiya/Eunoia-Health-AI.git
+cd Eunoia-Health-AI
 ```
 
-Run every command below from this `major-project` folder unless a step says otherwise.
+Run every command below from this `Eunoia-Health-AI` folder unless a step says otherwise.
 
 ---
 
