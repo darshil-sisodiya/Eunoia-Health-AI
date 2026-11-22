@@ -2,6 +2,8 @@
 
 Eunoia is a full-stack preventive health assistant built as an Expo React Native mobile app with a FastAPI backend. It supports account creation, health onboarding, deterministic risk scoring, Gemini-powered preventive insights, prescription image analysis, AI chat, step and meditation tracking, health-report PDF generation, and a Karnataka-focused medical cost estimator.
 
+> **New here? Start with [`RUNNING.md`](./RUNNING.md)**: a complete step-by-step guide to installing and running the backend and the app on a fresh machine (Windows, macOS, Linux).
+
 > **Prescription feature guide:** See [`PRESCRIPTION_VISION_README.md`](./PRESCRIPTION_VISION_README.md) for the complete capture, Gemini Vision OCR, medication-analysis, API, database, setup, and troubleshooting walkthrough.
 
 This repository is a monorepo:
@@ -658,7 +660,7 @@ MYSQL_PASSWORD=
 JWT_SECRET=replace-with-a-long-random-secret
 
 GEMINI_API_KEY=your-gemini-api-key
-GEMINI_MODEL=gemini-1.5-flash
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 Backend variable reference:
@@ -674,7 +676,7 @@ Backend variable reference:
 | `MYSQL_PASSWORD` | Depends | MySQL password for that user. |
 | `JWT_SECRET` | Yes | Secret used to sign JWTs. Replace for every real environment. |
 | `GEMINI_API_KEY` | Needed for AI features | Enables chat, prescription OCR/analysis, AI insights, PDF summaries, walking insights, and cost refinement. |
-| `GEMINI_MODEL` | No | Gemini model name. Defaults to `gemini-1.5-flash`. |
+| `GEMINI_MODEL` | No | Gemini model name. Defaults to `gemini-2.5-flash`. |
 
 ### Frontend `.env`
 
@@ -713,140 +715,29 @@ EXPO_PUBLIC_BACKEND_URL=http://192.168.x.x:8000
 
 ## Run Locally Step By Step
 
-### Prerequisites
+**Full guide with prerequisites, OS-specific commands and troubleshooting: [`RUNNING.md`](./RUNNING.md).**
 
-Install:
-
-| Tool | Suggested version |
-| --- | --- |
-| Python | 3.11 |
-| Node.js | 20.x |
-| MySQL | 8.x |
-| Git | Current stable |
-| Android Studio | For Android emulator/native builds |
-| Xcode | For iOS simulator/builds on macOS |
-
-### 1. Clone
+Quick version (needs Python 3.11/3.12, Node 20/22 LTS, and a running MySQL 8):
 
 ```powershell
-git clone https://github.com/darshil-sisodiya/major-project.git
-cd major-project
-```
+git clone https://github.com/darshil-sisodiya/Eunoia-Health-AI.git
+cd Eunoia-Health-AI
 
-### 2. Configure MySQL
-
-Option A: use an existing MySQL admin/root user and set those credentials in `backend/.env`.
-
-Option B: create a dedicated local user:
-
-```sql
-CREATE DATABASE IF NOT EXISTS health_assistant
-  DEFAULT CHARACTER SET utf8mb4
-  COLLATE utf8mb4_unicode_ci;
-
-CREATE USER IF NOT EXISTS 'health_user'@'localhost'
-  IDENTIFIED BY 'use-a-strong-local-password';
-
-GRANT ALL PRIVILEGES ON health_assistant.* TO 'health_user'@'localhost';
-FLUSH PRIVILEGES;
-```
-
-Then use:
-
-```env
-MYSQL_DB=health_assistant
-MYSQL_USER=health_user
-MYSQL_PASSWORD=use-a-strong-local-password
-```
-
-The backend creates the required tables automatically when it starts.
-
-### 3. Configure Backend
-
-```powershell
-Copy-Item backend/.env.example backend/.env
-notepad backend/.env
-```
-
-Set:
-
-- MySQL values.
-- A real `JWT_SECRET`.
-- `GEMINI_API_KEY` if you want AI features.
-
-### 4. Install And Run Backend
-
-```powershell
+# Backend (terminal 1). Edit backend/.env with your MySQL password, a JWT_SECRET and a GEMINI_API_KEY.
+Copy-Item backend\.env.example backend\.env
 cd backend
 py -3.11 -m venv venv
-.\venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
+.env\Scripts\Activate.ps1
 pip install -r requirements.txt
-python server.py
-```
+python server.py              # creates the database + tables automatically; check http://localhost:8000/api/health
 
-Alternative:
-
-```powershell
-cd backend
-.\run.ps1
-```
-
-Verify:
-
-```text
-http://localhost:8000/api/health
-```
-
-Expected shape:
-
-```json
-{
-  "status": "healthy",
-  "timestamp": "..."
-}
-```
-
-### 5. Configure Frontend
-
-Open a second terminal at the repository root:
-
-```powershell
-Copy-Item frontend/.env.example frontend/.env
-notepad frontend/.env
-```
-
-For a physical phone, use your computer LAN IP:
-
-```env
-EXPO_PUBLIC_BACKEND_URL=http://192.168.x.x:8000
-```
-
-### 6. Install And Run Frontend
-
-```powershell
+# Frontend (terminal 2)
 cd frontend
 npm install
-npm run start
+npx expo start                # scan the QR with Expo Go (same Wi-Fi), or press a / w
 ```
 
-Expo options:
-
-- Press `a` for Android emulator.
-- Press `i` for iOS simulator on macOS.
-- Scan the QR code with Expo Go for physical-device testing.
-- Run `npm run android` for a native Android development build.
-- Run `npm run web` for web testing.
-
-### 7. First Smoke Test
-
-1. Register a new user.
-2. Complete onboarding.
-3. Confirm the home screen shows a wellness score.
-4. Open the risk detail screen.
-5. Generate a cost estimate.
-6. Try chat and prescription upload if Gemini is configured.
-7. Generate the PDF report from the profile tab.
+The app auto-detects the backend on the machine running Expo, so `frontend/.env` is only needed to point at a remote backend.
 
 ## API Reference
 
@@ -910,7 +801,7 @@ MYSQL_USER=...
 MYSQL_PASSWORD=...
 JWT_SECRET=...
 GEMINI_API_KEY=...
-GEMINI_MODEL=gemini-1.5-flash
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 5. Verify:

@@ -56,7 +56,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 # Gemini configuration
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
-GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-1.5-flash')
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')
 # Free-tier quotas are per model, so a 429 on one model moves on to the next.
 GEMINI_FALLBACK_MODELS = [
     m.strip() for m in os.environ.get(
